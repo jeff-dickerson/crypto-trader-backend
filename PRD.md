@@ -156,7 +156,11 @@ The captain's decision: keep the requirements as two different kinds of gate, no
 1. **Backtest (Gate 1, "proves the edge").** 2 to 3 years of data, real costs (fees, funding, slippage, minimum notional).
    Tune on the first two-thirds, score frozen on the final third.
    Target roughly 150-300 signals, out-of-sample expectancy with a confidence interval excluding zero, no rule-breaking drawdown (the same 15% max-DD bar as the live gate).
-   **Not started.**
+   **Harness built and run end to end; edge NOT proven.**
+   The Build Order step-3 lab (`src/crypto_trader/backtest/`) implements all of the above: no-lookahead per-bar slicing, the cost model including funding across the hold, the captain-decision-4 funding filter, the lookback-and-filter sweep with the frozen out-of-sample third, and the three pinned denominators (signals, fills, closed trades).
+   It has only been run on deterministic synthetic data (real candle ingest needs the network, which the test and build environment does not use), so no reported number validates the real edge; the report verdict for a synthetic run is hard-coded to "NOT PROVEN" and one example report is committed at `backtest_reports/EXAMPLE_synthetic_gate1.md`.
+   On that synthetic data the funding filter did not improve, and in places worsened, the out-of-sample result, which is a genuine sweep finding (the filter is not assumed to help; the sweep exists to test it) but is not evidence about real markets.
+   A real Gate 1 run against ingested Bitunix candles is still owed before this gate can be called passed.
 2. **Paper (Gate 2, "proves the machine").** A paper adapter implementing the identical exchange interface; honest fills (limits fill only when the market trades through, stops always slip).
    4 weeks minimum, zero critical failures (enumerated concretely: undetected reconciliation drift, a stop that failed to rest server-side, an approval bypass, a fill modeled as filled when the market did not trade through it), full reconciliation.
    **Not started.**
@@ -284,7 +288,9 @@ Python, Docker (bot process container; a second web UI container is future work 
 
 1. **Scaffold and data layer.** Project structure, Docker, the SQLite schema, candle ingest with full ugly-data validation. **Done, merged.**
 2. **Pure framework.** Volume profile, bias, `generate_signal()` core, unit tests with synthetic candles engineered to trigger each path. **Done, merged.**
-3. **Backtest lab (Gate 1).** Replay engine with no-lookahead slicing, cost model, parameter sweep, markdown/JSON reports. **Not started.**
+3. **Backtest lab (Gate 1).** Replay engine with no-lookahead slicing, cost model, parameter sweep, markdown/JSON reports. **Done (harness), Gate 1 not yet proven.**
+   Built in `src/crypto_trader/backtest/`: a no-lookahead replay engine, a fees/funding/slippage/minimum-notional cost model, the captain-decision-4 funding filter, a lookback-and-filter sweep with a frozen out-of-sample score, and markdown/JSON reports; see [AGENTS.md](AGENTS.md) for the step-3 architecture decisions.
+   The lab has only been run on synthetic data so far (real candle ingest needs the network), so the edge is not validated, only the harness: Gate 1 remains not proven (see section 6.2).
    Design review's recommended read-only Bitunix spike (section 9.3) belongs between this step and step 4.
 4. **Paper loop (Gate 2).** DryRun adapter, position manager, approval flow, reconciliation, the Telegram bot with approval buttons. **Not started.**
 5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here). **Not started.**

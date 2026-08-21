@@ -11,3 +11,9 @@ data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Backtest run artifacts are not committed source. One example report is kept for reference
+# (see README.md) via the negations below; every other generated report stays ignored.
+backtest_reports/*
+!backtest_reports/EXAMPLE_synthetic_gate1.md
+!backtest_reports/EXAMPLE_synthetic_gate1.json

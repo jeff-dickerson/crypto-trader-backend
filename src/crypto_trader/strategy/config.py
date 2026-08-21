@@ -126,6 +126,29 @@ class StrategyConfig:
     # cross from declaring a directional bias.
     bias_neutral_band: float = 0.002
 
+    # --- Funding-cost filter (captain decision 4, Build Order step 3) -----------------
+    # generate_signal stays pure and funding-unaware: it never receives funding data and
+    # its signature is frozen. The funding-cost filter is therefore applied by the CALLER
+    # (the backtest engine, and later the paper/live position manager) as a gate on the
+    # entry signals generate_signal emits, using the threshold pinned here so it lives with
+    # the other strategy parameters rather than as a magic number. See
+    # crypto_trader.backtest.funding for the pure gate function that reads these fields.
+    #
+    # Off by default: like every step-2/step-3 default it is PENDING Gate 1 validation, and
+    # the Gate 1 parameter sweep runs the backtest with it both OFF and ON to measure
+    # whether it actually improves the out-of-sample result before it is trusted.
+    funding_filter_enabled: bool = False
+    # A with-bias entry is skipped when the funding rate at the entry bar runs ADVERSE to
+    # the position (funding the position would PAY, not earn) by more than this per-interval
+    # rate. 0.0005 = 0.05% per 8h funding interval. Rationale: bias-gating tends to put the
+    # strategy on the crowded, funding-paying side (PRD 3.4). At 0.05% per 8h over a typical
+    # multi-day hold (roughly 9 intervals across ~3 days) that is about 0.45% of notional in
+    # pure funding, which at this strategy's entry/stop geometry is on the order of 0.2R,
+    # comparable to the whole reproduced ~0.18R edge. Above this the funding headwind is
+    # judged large enough to skip the entry; at or below it the entry proceeds and the cost
+    # model still charges the actual funding paid.
+    funding_filter_max_adverse_rate: float = 0.0005
+
     def __post_init__(self) -> None:
         if self.profile_bins < 1:
             raise ValueError("profile_bins must be >= 1")
@@ -139,6 +162,8 @@ class StrategyConfig:
             raise ValueError("ma_exit_min_votes must be within [1, len(ensemble)]")
         if self.bias_fast_period >= self.bias_slow_period:
             raise ValueError("bias_fast_period must be shorter than bias_slow_period")
+        if self.funding_filter_max_adverse_rate < 0.0:
+            raise ValueError("funding_filter_max_adverse_rate must be >= 0")
 
     @property
     def lookback_candles(self) -> int:

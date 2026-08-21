@@ -12,11 +12,13 @@ Read both before starting any new task on this project.
 
 ## Status
 
-Build Order step 1 (project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation) and step 2 (the pure strategy framework) are complete.
+Build Order steps 1 through 3 are complete: project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation (step 1); the pure strategy framework (step 2); and the backtest lab (step 3).
 Step 2 adds the deterministic decision core in `src/crypto_trader/strategy/`: a volume profile, a daily bias gate, the separation-then-return zone/setup logic, and the pure `generate_signal()` function, with unit tests that engineer synthetic candles to trigger each path.
+Step 3 adds the Gate 1 backtest lab in `src/crypto_trader/backtest/`: a no-lookahead replay engine, a fees/funding/slippage/minimum-notional cost model, the captain-decision-4 funding filter, a parameter sweep with a frozen out-of-sample score, and markdown/JSON reports.
+Gate 1 itself is not yet proven: the lab has only been run on synthetic data (real candle ingest needs the network), so the edge is not validated, only the harness (see [PRD.md](PRD.md) section 6.2).
 A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) has also run, producing the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract the future paper and live adapters will implement, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
-Later steps (backtest lab, paper loop, interfaces, live adapter) are separate, future tasks.
-The interface is defined, but no working exchange adapter, backtest replay engine, or credential handling exists yet.
+Later steps (paper loop, interfaces, live adapter) are separate, future tasks.
+The `ExchangeAdapter` interface is defined, but no working exchange adapter or credential handling exists yet.
 See [PRD.md](PRD.md) section 12 for the full build order with accurate current status on every step.
 
 ## Requirements
@@ -49,6 +51,16 @@ src/crypto_trader/
   exchange/
     adapter.py            the abstract ExchangeAdapter interface (paper and live implement it)
     types.py               shared order/position/fill data models and the capability matrix
+  backtest/
+    engine.py             no-lookahead replay engine (causal_windows) and fill/management sim
+    costs.py               fees, slippage, funding, minimum-notional cost model (R-normalized)
+    funding.py              funding schedule/cost and the captain-decision-4 with-bias filter
+    metrics.py              expectancy, bootstrap and normal confidence intervals, drawdown
+    sweep.py                 lookback x funding-filter sweep with a frozen out-of-sample score
+    report.py                markdown and JSON report rendering
+    data.py                   read-only candle loading from the SQLite database
+    synthetic.py               deterministic synthetic market data for the runnable demo
+    cli.py                      command-line entry point (python -m crypto_trader.backtest)
   __main__.py            bot process entry point (one ingest pass, for now)
 tests/
   fixtures/synthetic_candles.py    engineered candle data for each validation path
@@ -60,6 +72,14 @@ tests/
   test_bias.py                     daily bias gate unit tests
   test_zones.py                    setup detection and entry-geometry unit tests
   test_generate_signal.py          generate_signal path and purity tests
+  test_backtest_no_lookahead.py    the no-lookahead regression tests (the safety-critical set)
+  test_backtest_costs.py           cost-model unit tests
+  test_backtest_funding.py         funding schedule and filter tests
+  test_backtest_metrics.py         expectancy and confidence-interval tests
+  test_backtest_engine.py          fill/management state machine and conservative intrabar rule
+  test_backtest_sweep.py           sweep split, selection, and filter-effect tests
+  test_backtest_report.py          report rendering and honest-verdict tests
+  test_backtest_data.py            read-only candle-loading round-trip tests
 ```
 
 ## Running the tests
@@ -75,6 +95,28 @@ python scripts/check_no_em_dash.py
 
 No test touches the network or a live exchange API.
 The Bitunix HTTP source is exercised only through the manual `python -m crypto_trader` entry point, never from the test suite.
+If the project is not installed as a package, prefix any command below with `PYTHONPATH=src` so `crypto_trader` is importable.
+
+## Running the backtest lab (Gate 1)
+
+The backtest lab runs a parameter sweep and writes a markdown and JSON report.
+It has two data modes.
+
+Synthetic mode needs no network and no database and is fully reproducible, so it is the easiest way to see the lab run end to end.
+
+```bash
+python -m crypto_trader.backtest --synthetic --out backtest_reports
+```
+
+Database mode reads real ingested candles read-only (the single-writer invariant) and is the mode a real Gate 1 run uses.
+
+```bash
+python -m crypto_trader.backtest --db data/crypto_trader.sqlite3 --symbols BTCUSDT,ETHUSDT --out backtest_reports
+```
+
+Useful flags: `--years` and `--seed` size the synthetic data, `--lookbacks 45,60,75` sets the swept lookback-day values (within the 30 to 90 day bound), `--bootstrap` sets the confidence-interval resample count, and `--name` sets the report file base name.
+Reports land in `backtest_reports/`, which is gitignored as run artifacts; one example synthetic report is committed at `backtest_reports/EXAMPLE_synthetic_gate1.md` for reference.
+The synthetic run reports Gate 1 as not proven by design: synthetic data validates only that the harness works, never the trading edge.
 
 ## Running with Docker
 

@@ -144,6 +144,42 @@ No working Bitunix adapter is built here; that is step 6.
   `SymbolRule.min_notional(price)` derives the USD floor as `minTradeVolume * price` because Bitunix has no standalone minimum-notional field; PRD 4.2's plan-time affordability check depends on this.
   `RateLimitStatus` gives the "rate-limit status always visible" surface; because Bitunix returns no quota headers, an adapter tracks its own budget and reports it here.
 
+## Architecture decisions from Build Order step 3 (backtest lab, Gate 1)
+
+Step 3 is the Gate 1 backtest lab in `src/crypto_trader/backtest/`.
+It consumes the unmodified step-2 `generate_signal` core and the step-1 candle storage without changing their public contracts; the only strategy-layer change is two new documented `StrategyConfig` fields for the funding filter.
+Run it with `python -m crypto_trader.backtest` (see README.md).
+
+- **No-lookahead slicing is owned here, in one function.**
+  `crypto_trader.backtest.engine.causal_windows` is the enforcement point step 2 deferred to this step.
+  For every simulated decision bar it returns the 4H tail ending exactly at that bar and the daily tail closed at or before it, and nothing later, so the profile and bias are recomputed per bar from a rolling causal window, never from one profile precomputed over the whole dataset.
+  The regression tests in `tests/test_backtest_no_lookahead.py` plant a distinctive candle just after a decision point and assert it changes neither the window, the profile, the bias, nor the signal, and also assert it WOULD change a result that wrongly included it, so the tests have real detecting power.
+  Any change to the engine must keep those tests passing.
+- **The engine calls the unmodified `generate_signal` per bar as the single decision authority.**
+  It does not reimplement or fork the decision, so backtest and live cannot diverge on the decision itself.
+  A faster incremental-bin volume profile was measured (about 92% of rolling slides leave the window's price extremes unchanged, so add/remove updates would be roughly 8x faster) but deliberately NOT injected: the frozen `generate_signal` signature makes it the single authority, and a second profile implementation risks floating-point-drift decision divergence, which conduct rule 7 forbids trading for speed.
+  Two provably-outcome-preserving accelerations ARE applied: an O(log n) bisect for the causal daily slice, trimmed to the last `bias_slow_period` daily candles (the bias gate reads no more than that), and a neutral-bias skip that avoids the profile build on flat bars where `generate_signal` returns NO_SIGNAL before building it.
+  Measured cost is about 230us per bar; a full 18-symbol, 2.5-year, 6-combination sweep runs in roughly 3 minutes.
+- **Conservative intrabar ordering, because 4H+daily cannot resolve within-bar path.**
+  On any management bar where both the stop and the take-profit are in range, the STOP is assumed to fill first (the worse outcome), per the committed rule in the "Data plan" entry above.
+  A resting entry limit fills only on a bar AFTER the signal bar (never the signal bar itself), which is the conservative no-lookahead choice and is what makes signals, fills, and closed trades three genuinely different counts.
+  Fills are modelled as FULL on trade-through; faithful partial fills need order-book depth the data plan does not carry, so the PARTIAL position state stays a paper/live concern and is not fabricated in the backtest.
+- **Cost model is R-normalized (`crypto_trader.backtest.costs`).**
+  Every closed trade is scored in risk multiples (R = |entry - initial_stop|), where position size cancels, so expectancy is size-independent; minimum notional is the one size-dependent check and is applied at plan time.
+  Fees follow order role (maker on the limit entry and a limit take-profit, taker plus adverse slippage on stop and market exits); funding is charged across the actual holding period at the spec's assumed 8h interval.
+  Every fee, slippage, and funding RATE is a documented placeholder pending the Bitunix adapter spike (PRD 9.3), and every report says so.
+- **Funding filter (captain decision 4) lives at the caller seam, not inside `generate_signal`.**
+  `generate_signal` stays pure and funding-unaware (frozen signature), so the filter is a gate the engine applies to the entry signals it emits: `crypto_trader.backtest.funding.funding_is_prohibitive`.
+  Threshold `StrategyConfig.funding_filter_max_adverse_rate = 0.0005` (0.05% per 8h): a with-bias entry is skipped when funding runs adverse to the position beyond this, because over a typical multi-day hold that is on the order of 0.2R, comparable to the whole reproduced ~0.18R edge (PRD 3.4).
+  It is OFF by default (`funding_filter_enabled = False`), PENDING Gate 1 validation, and the sweep runs it both off and on so the report can show whether it actually helps out of sample.
+- **Swept parameters and the frozen out-of-sample score.**
+  The sweep varies the lookback across 45/60/75 days (a small range around the pinned 60, inside the spec's 30-90 bound) and the funding filter off/on.
+  Tuning uses the first two-thirds of the timeline and the score is frozen on the final third; the chosen combination is selected by IN-SAMPLE mean R only, and every reported number is labelled in-sample or out-of-sample.
+  Reports (`crypto_trader.backtest.report`) go to a gitignored `backtest_reports/`; one example synthetic report is committed for reference.
+- **Gate 1 is NOT proven yet (project-level finding).**
+  The lab has only been run on deterministic synthetic data (`crypto_trader.backtest.synthetic`), because real candle ingest needs the network; synthetic data validates the harness, never the edge.
+  A real Gate 1 run against ingested candles is still owed, and no report may claim a pass on synthetic data (the verdict logic hard-codes "NOT PROVEN" for synthetic runs).
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
