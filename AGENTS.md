@@ -3,8 +3,8 @@
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 Crypto Trader is an approve-then-automate swing-trading bot for crypto perpetual futures on Bitunix, adapter-scaffolded for any venue.
-See [README.md](README.md) for what has actually been built and how to run it.
-This file carries the standing rules and decisions that apply beyond any one task.
+See [README.md](README.md) for what has actually been built and how to run it, and [PRD.md](PRD.md) for the full product requirements (mission, strategy parameters, risk system, validation gates, architecture, interface scope, ops and safety, data and storage, build order, and the decisions log).
+This file carries the standing rules and decisions that apply beyond any one task; where this file and PRD.md overlap, treat this file as the more current source for anything already built, since it is updated per task.
 
 ## Governing principles (apply to everything built in this project)
 

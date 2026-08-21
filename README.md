@@ -4,9 +4,11 @@ An approve-then-automate swing-trading bot for crypto perpetual futures on Bitun
 The bot is adapter-scaffolded so any venue can be plugged in later.
 It is built for ugly data, driven by risk management first and profitability second.
 The human approves; the machine executes and manages.
+The v1 strategy is a volume-profile POC zone retest, gated by a daily bias filter, with a tiered risk schedule and a defined validation path from backtest through paper to live trading.
 
+The full requirements, including the concrete strategy parameters, the risk system, the validation gates, and the interface and ops requirements, live in [PRD.md](PRD.md).
 Project conduct rules, locked captain decisions, and architecture decisions live in [AGENTS.md](AGENTS.md).
-Read that file before starting any new task on this project.
+Read both before starting any new task on this project.
 
 ## Status
 
@@ -14,6 +16,12 @@ Build Order step 1 (project scaffolding, Docker, the SQLite schema, and candle i
 Step 2 adds the deterministic decision core in `src/crypto_trader/strategy/`: a volume profile, a daily bias gate, the separation-then-return zone/setup logic, and the pure `generate_signal()` function, with unit tests that engineer synthetic candles to trigger each path.
 Later steps (backtest lab, paper loop, interfaces, live adapter) are separate, future tasks.
 No backtest replay engine, exchange adapter, or credential handling exists yet.
+See [PRD.md](PRD.md) section 12 for the full build order with accurate current status on every step.
+
+## Requirements
+
+[PRD.md](PRD.md) is the authoritative requirements document: mission, the v1 strategy with its concrete parameter defaults, the risk system, success definition and validation gates, architecture, interface scope, ops and safety (including still-open risks), data and storage, the stack, build order, and a decisions log.
+This README stays a practical entry point; it does not duplicate that detail.
 
 ## Project layout
 
