@@ -14,8 +14,9 @@ Read both before starting any new task on this project.
 
 Build Order step 1 (project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation) and step 2 (the pure strategy framework) are complete.
 Step 2 adds the deterministic decision core in `src/crypto_trader/strategy/`: a volume profile, a daily bias gate, the separation-then-return zone/setup logic, and the pure `generate_signal()` function, with unit tests that engineer synthetic candles to trigger each path.
+A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) has also run, producing the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract the future paper and live adapters will implement, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
 Later steps (backtest lab, paper loop, interfaces, live adapter) are separate, future tasks.
-No backtest replay engine, exchange adapter, or credential handling exists yet.
+The interface is defined, but no working exchange adapter, backtest replay engine, or credential handling exists yet.
 See [PRD.md](PRD.md) section 12 for the full build order with accurate current status on every step.
 
 ## Requirements
@@ -45,6 +46,9 @@ src/crypto_trader/
     bias.py                   long/short/neutral daily bias gate
     zones.py                   separation-then-return setup, first-touch, stop/TP geometry
     signal.py                   the pure generate_signal() core and its Signal result type
+  exchange/
+    adapter.py            the abstract ExchangeAdapter interface (paper and live implement it)
+    types.py               shared order/position/fill data models and the capability matrix
   __main__.py            bot process entry point (one ingest pass, for now)
 tests/
   fixtures/synthetic_candles.py    engineered candle data for each validation path

@@ -224,11 +224,26 @@ Exchange downtime: retry with backoff, alert; on-exchange stops hold the floor.
 Reconciliation drift: exchange is truth; freeze the affected symbol, alert, reconcile, resume only on a clean match.
 Design review notes that a naive equality check will false-positive against ordinary funding and fee accrual between reconciliation cycles; "clean match" needs a numeric tolerance definition (size epsilon at exchange lot precision, price rounding, a funding/fee accrual term) before the reconciler is built in Build Order step 4.
 
-### 9.3 Bitunix API surface (open risk, MUST-VERIFY before the live adapter)
+### 9.3 Bitunix API surface (characterized by a read-only spike; residual items still open)
 
-Bitunix's actual order-type support (native stops, trailing, OCO, position mode), rate limits, funding schedule, and historical candle depth are unverified and load-bearing for "on-exchange stops are the floor," OCO emulation, and reconciliation tolerances.
-Design review recommends a read-only Bitunix spike (real market data and account-read endpoints, no orders placed) inserted between Build Order steps 3 and 4, so the `ExchangeAdapter` interface is designed against verified reality rather than an imagined one, instead of deferring this discovery all the way to the live-adapter step.
-This is recorded here as a requirement to close before the paper loop is built, not yet resolved.
+The read-only Bitunix characterization spike recommended by design review has run (no orders placed, no credentials used, public documentation and public unauthenticated REST endpoints only), inserted between Build Order steps 3 and 4.
+It produced the `ExchangeAdapter` interface (`src/crypto_trader/exchange/`) designed against verified reality, and the full findings with endpoint citations are in [AGENTS.md](AGENTS.md), "Architecture decisions from the Bitunix characterization spike."
+Headline results:
+
+**Confirmed against the public API.**
+Native server-side stops exist (a MARKET order gated on a trigger price via the TP/SL surface), so "on-exchange stops are the floor" is literal, not emulated.
+Reduce-only is a native order flag.
+A paired take-profit + stop-loss bracket on a position is a single native call, and that is the specific "OCO" this strategy needs; arbitrary OCO between two unrelated orders is not offered.
+No native trailing stop was found in the documented REST endpoints, so trailing is emulated bot-side (the strategy core already computes the trail).
+Rate limits are simple fixed caps with no weight accounting and no quota headers: REST market data 10 req/sec/IP, private trade endpoints 10 req/sec/UID, WebSocket 5 inbound messages/sec.
+Per-symbol precision and a per-symbol minimum ORDER SIZE come from the public trading-pairs endpoint, but there is no standalone minimum-NOTIONAL field, so the plan-time notional floor (section 4.2) is derived as min order size times price.
+The funding interval is 8 hours, confirming the original assumption, and historical funding rate is available from a public endpoint, so the Gate 1 cost model (step 3) and the funding filter (decision 4) can source real funding from Bitunix itself.
+Historical candle depth reaches about 4.35 years for BTCUSDT and ETHUSDT at both 4H and daily (paginated back via startTime/endTime past the 200-row-per-request cap), so Gate 1's 2-3 years of data is achievable from Bitunix alone for established majors; history is per-symbol and bounded by listing date, so the section 10 "history supplement from a major venue" fallback is only needed for symbols younger than the Gate 1 window, not for the BTC/ETH core.
+
+**Still open, deferred to the live adapter (Build Order step 6) with credentials.**
+Position mode is confirmed account-global (one-way or hedge) but the live account's actual current mode needs an authenticated read, so the interface reports it rather than hardcoding an assumption.
+Margin mode is confirmed per-symbol (isolation or cross); isolation is the principle-4 floor and must be set explicitly per traded symbol, since the majors show a non-isolated default in public data.
+WebSocket reconnect/resync semantics are thin in the public docs; a public stream is not needed for the interface, so it carries no streaming method and step 6 owns any stream it adds (this residual item also feeds the kill-switch degraded-mode work in section 9.1).
 
 ### 9.4 Secrets (four layers)
 

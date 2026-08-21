@@ -105,6 +105,45 @@ It builds no backtest replay engine, no paper/live adapter, and no interface: th
   The volume profile and bias are computed from EXACTLY the candles handed in, however many are present, and no decision ever reads a candle after the last one; separation-then-return is decided using only candles at or before the decision point.
   The future backtest replay engine (step 3) OWNS feeding this function a correctly causally-sliced, growing window; this core's only job is never to break that guarantee on its own.
 
+## Architecture decisions from the Bitunix characterization spike (ExchangeAdapter interface)
+
+This spike was read-only: no orders placed, no credentials used, only Bitunix's public documentation and public unauthenticated REST endpoints.
+It exists to design the `ExchangeAdapter` seam against verified reality (PRD section 9.3), between Build Order steps 3 and 4.
+The deliverable is the interface only: `src/crypto_trader/exchange/adapter.py` (the abstract `ExchangeAdapter`) plus `src/crypto_trader/exchange/types.py` (its shared data models).
+No working Bitunix adapter is built here; that is step 6.
+
+- **ABC, not Protocol, for the exchange seam.**
+  The candle-source seam is a `Protocol` (single-method, duck-typed, fixture-swapped).
+  `ExchangeAdapter` is an `abc.ABC` instead because it is money-adjacent, multi-method, and implemented by exactly two named classes (paper/DryRun in step 4, live Bitunix in step 6) that the position manager and reconciler will isinstance-check.
+  An ABC fails loudly at instantiation if a method is missing, rather than silently at first call; for an order-placing surface that is the safer failure mode.
+  The rationale is in `adapter.py`'s module docstring and is covered by `tests/test_exchange_adapter.py`.
+
+- **CONFIRMED against the public API (cite the endpoint or doc page).**
+  Order types (`.../api-docs/futures/trade/place_order.html`, `.../tp_sl/place_tp_sl_order.html`): base types are LIMIT and MARKET only, with time-in-force `effect` in {GTC, IOC, FOK, POST_ONLY}.
+  Native server-side stops EXIST: a stop is a MARKET order gated on a trigger price via the TP/SL surface (`slPrice` with `slOrderType=MARKET`, `slStopType` MARK_PRICE or LAST_PRICE), so "on-exchange stops are the floor" (principle 4) is literal, not emulated.
+  `reduceOnly` is a native order flag.
+  A paired take-profit + stop-loss BRACKET on a position is placed in one native call (either leg firing closes the position): this is the specific "OCO" the strategy needs, and it is native.
+  Min notional and precision (`.../api/v1/futures/market/trading_pairs`, public): per-symbol `minTradeVolume` (base units), `basePrecision` (qty dp), `quotePrecision` (price dp), leverage bounds, and per-symbol funding-rate caps.
+  Funding (`.../api/v1/futures/market/funding_rate`): `fundingInterval` is 8 (hours), confirming the spec assumption; per-symbol.
+  Historical funding (`.../api/v1/futures/market/get_funding_rate_history`, public): available, returns `fundingRate`/`fundingTime`/`markPrice` at 8h spacing, so the Gate 1 cost model (step 3) and the funding filter (decision 4) can source real funding from Bitunix itself.
+  Rate limits: REST market data 10 req/sec/IP, private trade/TP-SL endpoints 10 req/sec/UID, WebSocket max 5 inbound messages/sec (exceed then disconnect, repeat then IP block); no weight-accounting scheme and no quota headers in responses.
+  Candle depth (empirical, via `BitunixCandleSource` / the public kline endpoint): the kline endpoint caps at 200 rows per request (`limit` default 100, max 200) but `startTime`/`endTime` paginate backward; BTCUSDT and ETHUSDT reach ~2022-04-17 (about 4.35 years) at BOTH 4H and daily, so Gate 1's 2-3 years is achievable from Bitunix alone for established majors.
+  History is per-symbol and bounded by listing date: a recently-listed alt (for example WIFUSDT) goes back only to its listing (about 2.6 years), so the spec's "history supplement from a major venue" fallback (PRD section 10) is only needed for symbols younger than the Gate 1 window, not for the BTC/ETH core.
+  Kline rows return newest-first (descending time); this is an ingest-layer detail owned by step 1, noted here only so a future reader is not surprised.
+
+- **COULD NOT confirm without credentials, so the interface reports rather than assumes.**
+  Position mode is CONFIRMED account-global on Bitunix (param `positionMode` in {ONE_WAY, HEDGE}, unchangeable while any position or order is open), but the account's ACTUAL current mode needs an authenticated read.
+  The interface therefore never hardcodes it: `ExchangeCapabilities.position_mode` and `Position.position_mode` carry the queried value, and the docstrings flag that the four-state `PositionState` contract assumes one-way netting while HEDGE mode can hold a simultaneous long and short.
+  Margin mode is CONFIRMED per-symbol (param `marginMode` in {ISOLATION, CROSS}); ISOLATION is the principle-4 floor and the live adapter (step 6) must set it explicitly per traded symbol, since BTCUSDT/ETHUSDT show a non-isolated default in public trading-pairs data.
+  A native TRAILING stop was NOT found in the documented REST endpoints; `ExchangeCapabilities.native_trailing_stop` is False and trailing is emulated bot-side by re-placing the stop tighter (the strategy core already computes the trail).
+  Arbitrary OCO between two unrelated orders is not offered (`native_arbitrary_oco` is False); only the position-scoped TP/SL bracket above is native.
+  WebSocket reconnect/resync semantics are thin in the public docs (public `wss://fapi.bitunix.com/public/`, private `.../private/`, a ping/pong heartbeat with no stated interval); a public stream is not needed for this task or this contract, so no streaming method is in the interface and step 6 owns any stream it adds.
+
+- **How open questions are encoded in code.**
+  `ExchangeCapabilities` is the machine-readable confirmed-versus-emulated matrix, so the position manager and reconciler branch on facts, not prose.
+  `SymbolRule.min_notional(price)` derives the USD floor as `minTradeVolume * price` because Bitunix has no standalone minimum-notional field; PRD 4.2's plan-time affordability check depends on this.
+  `RateLimitStatus` gives the "rate-limit status always visible" surface; because Bitunix returns no quota headers, an adapter tracks its own budget and reports it here.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
