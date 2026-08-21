@@ -1,0 +1,16 @@
+services:
+  bot:
+    build: .
+    volumes:
+      - crypto-trader-data:/data
+    environment:
+      - CRYPTO_TRADER_DB_PATH=/data/crypto_trader.sqlite3
+    restart: unless-stopped
+
+  # A read-only UI service is deferred past v1 (per captain decision 3: v1 is
+  # Telegram-first plus a read-only terminal monitor, no web UI).
+  # When that lands, add it here as a second service that mounts the same
+  # crypto-trader-data volume read-only, without restructuring this file.
+
+volumes:
+  crypto-trader-data:
