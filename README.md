@@ -10,9 +10,10 @@ Read that file before starting any new task on this project.
 
 ## Status
 
-This is Build Order step 1: project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation.
-Later steps (the pure signal framework, backtest lab, paper loop, interfaces, live adapter) are separate, future tasks.
-No strategy logic, exchange adapter, or credential handling exists yet.
+Build Order step 1 (project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation) and step 2 (the pure strategy framework) are complete.
+Step 2 adds the deterministic decision core in `src/crypto_trader/strategy/`: a volume profile, a daily bias gate, the separation-then-return zone/setup logic, and the pure `generate_signal()` function, with unit tests that engineer synthetic candles to trigger each path.
+Later steps (backtest lab, paper loop, interfaces, live adapter) are separate, future tasks.
+No backtest replay engine, exchange adapter, or credential handling exists yet.
 
 ## Project layout
 
@@ -28,12 +29,25 @@ src/crypto_trader/
     source.py             swappable CandleSource interface, Bitunix HTTP and fixture implementations
     validate.py            ugly-data validation: dedup, gap detection, timestamp sanity, still-forming exclusion
     pipeline.py             fetch, validate, store orchestration
+  strategy/
+    config.py             every pinned, overridable strategy parameter (StrategyConfig)
+    indicators.py          shared pure indicator helpers (SMA)
+    position.py             the four-state position contract generate_signal consumes
+    volume_profile.py        POC, VAH, VAL, and HVN/LVN structure from 4H candles
+    bias.py                   long/short/neutral daily bias gate
+    zones.py                   separation-then-return setup, first-touch, stop/TP geometry
+    signal.py                   the pure generate_signal() core and its Signal result type
   __main__.py            bot process entry point (one ingest pass, for now)
 tests/
-  fixtures/synthetic_candles.py   engineered candle data for each validation path
-  test_validate.py                unit tests for the validator
-  test_db_schema.py               schema, WAL, and backup tests
-  test_ingest_pipeline.py         end to end ingest tests, fixture data only
+  fixtures/synthetic_candles.py    engineered candle data for each validation path
+  fixtures/strategy_candles.py     engineered candles for each strategy path
+  test_validate.py                 unit tests for the validator
+  test_db_schema.py                schema, WAL, and backup tests
+  test_ingest_pipeline.py          end to end ingest tests, fixture data only
+  test_volume_profile.py           volume profile unit tests
+  test_bias.py                     daily bias gate unit tests
+  test_zones.py                    setup detection and entry-geometry unit tests
+  test_generate_signal.py          generate_signal path and purity tests
 ```
 
 ## Running the tests

@@ -69,6 +69,42 @@ Manual-review items not automated yet: commit-message em-dash and co-author-trai
 - **Symbol universe.** `crypto_trader.config.DEFAULT_SYMBOLS` is a small seed list (BTCUSDT, ETHUSDT) for development.
   Building out the full universe is future work.
 
+## Architecture decisions from Build Order step 2 (pure strategy framework)
+
+Step 2 is the pure, deterministic decision core in `src/crypto_trader/strategy/`.
+It builds no backtest replay engine, no paper/live adapter, and no interface: those are later tasks.
+`generate_signal(candles, htf_candles, position_state, config)` is a real pure function: no `datetime.now`, no I/O, no global state.
+`candles` is the primary 4H timeframe; `htf_candles` is the daily higher timeframe used only for the bias gate; the current decision point is always the last 4H candle.
+
+- **Proposed parameter defaults, PENDING Gate 1 (captain decision 5).**
+  Every unspecified strategy parameter is pinned to a reasoned, concrete default and lives as a named, overridable field on `crypto_trader.strategy.config.StrategyConfig`, never as a magic number in logic.
+  None of these are settled truth: only the future Gate 1 out-of-sample backtest can validate them.
+  The exhaustive per-field rationale is in `StrategyConfig`'s field comments; the headline choices are:
+  volume profile by a FIXED BIN COUNT (24) across the lookback price span, not a fixed price increment, so it self-scales across symbols;
+  70% value area (conventional volume-profile default);
+  HVN/LVN cut relative to the MEAN bin volume (>= 1.3x is an HVN, <= 0.5x is an LVN);
+  a SINGLE pinned lookback of 60 days (midpoint of the allowed 30-90 range);
+  separation defined as price holding >= 1.5% beyond the boundary for >= 3 consecutive 4H candles;
+  entry at the value-area EDGE (VAL for a long, VAH for a short), never the POC centre line;
+  stop in the adjacent LVN just beyond the entry zone (fixed-offset fallback at a data edge);
+  take profit just before the next opposing HVN (R-multiple fallback);
+  a 3-SMA 4H ensemble (10/20/50) with a majority vote (>= 2) for the momentum-shift exit;
+  trailing stop arming at +1R and trailing 1R behind the best price.
+- **A swept lookback would be a tuned parameter.**
+  The 60-day lookback is deliberately one fixed value, not swept or tuned in this task.
+  Sweeping it is tuning, and only the future Gate 1 out-of-sample number can validate a swept value honestly, so do not sweep it before Gate 1 exists.
+- **Position-state contract (four states, not a flat/in-position boolean).**
+  `crypto_trader.strategy.position.PositionState` distinguishes FLAT, PENDING (entry limit resting, no fill), PARTIAL (partially filled, real exposure), and OPEN (fully established), because a resting limit at a zone boundary can partially fill.
+  Management rules (trailing stop, momentum-shift exit) run for PARTIAL and OPEN; PENDING holds and awaits a fill; FLAT seeks an entry.
+  The overtrading governor's memory (`traded_zones`) persists across a closed trade back to FLAT, so a later retest of an already-traded zone is rejected: one zone, one trade.
+  `generate_signal` never mutates a `PositionState` (it is frozen); the future position manager threads an updated state into the next call.
+  Order placement and fill tracking are future paper-loop work; this task only defines and consumes the contract.
+- **Result type.** `generate_signal` returns a frozen `crypto_trader.strategy.signal.Signal` with an explicit `SignalAction` (no signal, enter long/short with entry/stop/take-profit attached, update trailing stop, momentum-shift exit, hold), extensible with defaulted fields without breaking callers.
+- **No-lookahead responsibility split (the key contract with step 3).**
+  Lookahead is a property of how the input window is constructed, not of the pure function consuming it.
+  The volume profile and bias are computed from EXACTLY the candles handed in, however many are present, and no decision ever reads a candle after the last one; separation-then-return is decided using only candles at or before the decision point.
+  The future backtest replay engine (step 3) OWNS feeding this function a correctly causally-sliced, growing window; this core's only job is never to break that guarantee on its own.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
