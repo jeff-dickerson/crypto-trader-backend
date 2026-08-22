@@ -15,6 +15,7 @@ from crypto_trader.exchange import (
     Balance,
     ExchangeAdapter,
     ExchangeCapabilities,
+    MarketOrderRequest,
     Order,
     OrderRequest,
     Position,
@@ -108,6 +109,9 @@ def test_complete_stub_adapter_satisfies_the_contract() -> None:
             return BTC_RULE
 
         def place_limit_order(self, request: OrderRequest) -> Order:
+            raise NotImplementedError
+
+        def place_market_order(self, request: MarketOrderRequest) -> Order:
             raise NotImplementedError
 
         def place_stop_order(self, request: StopOrderRequest) -> Order:
