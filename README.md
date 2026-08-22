@@ -12,13 +12,16 @@ Read both before starting any new task on this project.
 
 ## Status
 
-Build Order steps 1 through 3 are complete: project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation (step 1); the pure strategy framework (step 2); and the backtest lab (step 3).
+Build Order steps 1 through 4 are complete as machinery, with the live/paper validation windows still owed: project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation (step 1); the pure strategy framework (step 2); the backtest lab (step 3); and the paper loop (step 4).
+Step 4 adds the approve-then-execute paper machine (Gate 2): a DryRun exchange adapter with honest fills in `src/crypto_trader/exchange/dryrun.py`, risk sizing with the tiered schedule and the kill-switch clamp plus the position-manager lifecycle and reconciliation in `src/crypto_trader/paper/`, and the approval seam (an in-memory fake and a real Telegram surface) in `src/crypto_trader/approval/`.
+It builds and self-tests the machine only; the 4-week paper-trading window is a future operational task, so Gate 2 itself is not yet satisfied (see [PRD.md](PRD.md) section 6.2).
 Step 2 adds the deterministic decision core in `src/crypto_trader/strategy/`: a volume profile, a daily bias gate, the separation-then-return zone/setup logic, and the pure `generate_signal()` function, with unit tests that engineer synthetic candles to trigger each path.
 Step 3 adds the Gate 1 backtest lab in `src/crypto_trader/backtest/`: a no-lookahead replay engine, a fees/funding/slippage/minimum-notional cost model, the captain-decision-4 funding filter, a parameter sweep with a frozen out-of-sample score, and markdown/JSON reports.
 A real Gate 1 run has since happened against ingested Bitunix candles across 14 symbols, and Gate 1 did NOT pass: too few out-of-sample signals against the 150-300 target and a negative out-of-sample mean expectancy with a confidence interval that does not exclude zero (see [PRD.md](PRD.md) section 6.2 and `backtest_reports/gate1_real_2026-08-21.md` for the full honest result).
-A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) has also run, producing the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract the future paper and live adapters will implement, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
-Later steps (paper loop, interfaces, live adapter) are separate, future tasks.
-The `ExchangeAdapter` interface is defined, but no working exchange adapter or credential handling exists yet.
+A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) produced the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract for paper and live adapters, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
+Step 4 adds the first working implementation of that interface: the DryRun paper adapter, alongside the live Bitunix adapter still to come in step 6.
+Step 4 also added one method to that interface, `place_market_order` (MARKET is a confirmed-native Bitunix order type), needed for the momentum-shift exit and reused by step 5's kill switch.
+Later steps (the read-only TUI and daily digest, the kill switch, and the live Bitunix adapter) are separate, future tasks; no live exchange credential handling exists yet.
 See [PRD.md](PRD.md) section 12 for the full build order with accurate current status on every step.
 
 ## Requirements
@@ -51,6 +54,19 @@ src/crypto_trader/
   exchange/
     adapter.py            the abstract ExchangeAdapter interface (paper and live implement it)
     types.py               shared order/position/fill data models and the capability matrix
+    dryrun.py              the DryRun (paper) adapter: honest fills against candle data
+  approval/
+    channel.py            the ApprovalChannel ABC, decision and event vocabulary
+    memory.py              in-memory approval channel (the fake the loop is tested against)
+    telegram.py            the real Telegram approval surface (fails safe with no token)
+  paper/
+    risk.py               tiered risk sizing, the slider, and the kill-switch clamp
+    plan.py                the TradePlan a human approves, with its single risk number
+    position_manager.py    signal consumption, approval, and the four-state lifecycle
+    reconciliation.py      drift check with a documented tolerance, freeze-on-drift
+    loop.py                the PaperTrader orchestrator and the Gate 2 critical-failure audit
+    __main__.py            paper-loop entry point (python -m crypto_trader.paper --synthetic)
+  secrets.py             env-loaded secrets (Telegram token), redacted, never in the config plane
   backtest/
     engine.py             no-lookahead replay engine (causal_windows) and fill/management sim
     costs.py               fees, slippage, funding, minimum-notional cost model (R-normalized)
@@ -80,6 +96,12 @@ tests/
   test_backtest_sweep.py           sweep split, selection, and filter-effect tests
   test_backtest_report.py          report rendering and honest-verdict tests
   test_backtest_data.py            read-only candle-loading round-trip tests
+  test_exchange_adapter.py         the ExchangeAdapter ABC contract and SymbolRule maths
+  test_dryrun_adapter.py           the DryRun honest-fills rules (subsequent-candle, slippage, worst-of-intrabar)
+  test_paper_risk.py               tiered sizing, the kill-switch clamp, and plan-time min-notional voiding
+  test_paper_reconciliation.py     the reconciliation tolerance and each drift condition
+  test_approval_channels.py        the in-memory channel, the mocked Telegram surface, and secrets hygiene
+  test_paper_loop.py               end-to-end approve-then-execute runs and the Gate 2 audit
 ```
 
 ## Running the tests
@@ -119,6 +141,18 @@ Reports land in `backtest_reports/`, which is gitignored as run artifacts; one e
 The synthetic run reports Gate 1 as not proven by design: synthetic data validates only that the harness works, never the trading edge.
 A real database-mode run has since happened, ingesting 14 symbols from Bitunix's public kline endpoint, and its report is committed at `backtest_reports/gate1_real_2026-08-21.md` (and `.json`) for reference: Gate 1 did not pass on that real data, see [PRD.md](PRD.md) section 6.2 for the honest numbers.
 The database file itself is never committed; candle data is re-fetchable and gitignored per the data plan.
+
+## Running the paper loop (Gate 2)
+
+The paper loop is the approve-then-execute machine Gate 2 proves: honest fills, the approval flow, and reconciliation.
+Synthetic mode needs no network, no database, and no Telegram bot token, so it runs the whole machine and prints its critical-failure audit.
+
+```bash
+python -m crypto_trader.paper --synthetic --years 1.5
+```
+
+If a Telegram bot token and an allowlisted chat id are set in the environment (`CRYPTO_TRADER_TELEGRAM_BOT_TOKEN` and `CRYPTO_TRADER_TELEGRAM_ALLOWED_CHAT_ID`), the loop uses the real Telegram approval channel; otherwise it prints a clear message and falls back to the in-memory auto-approve channel, so it never crashes for lack of a credential.
+Like the Gate 1 lab, a synthetic run validates only that the machine works, never the edge: it builds and self-tests the machine, and the 4-week paper-trading window is a future operational task (see [PRD.md](PRD.md) section 6.2).
 
 ## Running with Docker
 

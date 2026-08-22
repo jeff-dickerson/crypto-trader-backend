@@ -189,6 +189,30 @@ class OrderRequest:
 
 
 @dataclass(frozen=True)
+class MarketOrderRequest:
+    """A market order to place, used to CLOSE or reduce a position at once.
+
+    MARKET is a CONFIRMED native Bitunix order type (the characterization spike found the
+    base order types are LIMIT and MARKET only). This request expresses the one operation a
+    resting limit or a native stop cannot: an immediate market fill on demand. The strategy
+    needs it for the momentum-shift exit (generate_signal's EXIT_MOMENTUM_SHIFT closes at
+    market), and Build Order step 5's kill switch needs the same operation to "close at
+    market" on demand; adding it now (additively) keeps step 5 from needing a breaking change.
+
+    `reduce_only` defaults True because every market order this bot places is a close/reduce,
+    never an opener: the resting first-touch limit is the only way the bot opens exposure.
+    A market order has no limit price, so none is carried; the fill price is exchange truth,
+    returned on the resulting Order and Fill.
+    """
+
+    symbol: str
+    side: OrderSide
+    quantity: float
+    reduce_only: bool = True
+    client_order_id: str | None = None
+
+
+@dataclass(frozen=True)
 class StopOrderRequest:
     """A native server-side stop order: the on-exchange safety floor (principle 4).
 

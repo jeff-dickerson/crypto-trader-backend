@@ -165,7 +165,11 @@ The captain's decision: keep the requirements as two different kinds of gate, no
    Candidate next steps (not applied by this task, per captain decision 5: a parameter change needs a captain decision, not a unilateral edit): expand the symbol universe further, revisit the pinned 60-day lookback (the sweep already covers 45/60/75 and none look better in this real run), or accept that the current strategy parameterization does not clear Gate 1 as specified.
 2. **Paper (Gate 2, "proves the machine").** A paper adapter implementing the identical exchange interface; honest fills (limits fill only when the market trades through, stops always slip).
    4 weeks minimum, zero critical failures (enumerated concretely: undetected reconciliation drift, a stop that failed to rest server-side, an approval bypass, a fill modeled as filled when the market did not trade through it), full reconciliation.
-   **Not started.**
+   **Machine built; the 4-week paper window NOT yet run.**
+   The Build Order step-4 paper loop (`src/crypto_trader/paper/`, plus the DryRun adapter in `src/crypto_trader/exchange/dryrun.py` and the approval channels in `src/crypto_trader/approval/`) implements the whole machine: honest fills (a resting limit fills only on a strictly-later candle that trades through it, a stop always slips, the conservative worst-of-intrabar rule), the approve-then-execute flow (no order reaches the exchange without a recorded approval, and the approval channel fails closed), the position-state lifecycle driven by exchange-reported truth, and reconciliation with a documented numeric tolerance that freezes a symbol on drift.
+   Each run audits the four critical-failure classes above explicitly and reports whether it stayed clean; see [AGENTS.md](AGENTS.md) for the step-4 architecture decisions.
+   This task builds and self-tests the machine only: it does NOT run the 4-week paper window, which is a future, separate operational task, so Gate 2 itself is not yet satisfied.
+   Running the machine on synthetic data (`python -m crypto_trader.paper --synthetic`) validates the harness, never the edge, exactly as with Gate 1.
 3. **Live (Gate 3, "proves reality").** Minimum viable size, the 20-trade operations floor from section 6.1, positive expectancy (not negative) with zero ops failures, then scale.
    **Not started.**
 
@@ -294,7 +298,10 @@ Python, Docker (bot process container; a second web UI container is future work 
    Built in `src/crypto_trader/backtest/`: a no-lookahead replay engine, a fees/funding/slippage/minimum-notional cost model, the captain-decision-4 funding filter, a lookback-and-filter sweep with a frozen out-of-sample score, and markdown/JSON reports; see [AGENTS.md](AGENTS.md) for the step-3 architecture decisions.
    First run only on synthetic data (the harness-only signal); a real run has since happened against 14 symbols of ingested Bitunix candles and Gate 1 failed on both bars (33 out-of-sample closed trades against the 150-300 target, a negative out-of-sample mean expectancy with a confidence interval that does not exclude zero), see section 6.2 and `backtest_reports/gate1_real_2026-08-21.md` for the full honest result.
    Design review's recommended read-only Bitunix spike (section 9.3) has also run since; see [AGENTS.md](AGENTS.md).
-4. **Paper loop (Gate 2).** DryRun adapter, position manager, approval flow, reconciliation, the Telegram bot with approval buttons. **Not started.**
+4. **Paper loop (Gate 2).** DryRun adapter, position manager, approval flow, reconciliation, the Telegram bot with approval buttons. **Machine built and self-tested; the 4-week paper window not yet run.**
+   Built in `src/crypto_trader/paper/` (risk sizing with the tiered schedule and the kill-switch clamp, the position-manager lifecycle, reconciliation, and the `PaperTrader` loop), `src/crypto_trader/exchange/dryrun.py` (the honest-fills DryRun adapter), and `src/crypto_trader/approval/` (the approval seam, an in-memory fake, and a real Telegram surface that fails safe when no token is configured); see section 6.2 and [AGENTS.md](AGENTS.md).
+   The `ExchangeAdapter` interface gained one additive method, `place_market_order` (MARKET is confirmed native), needed for the momentum-shift exit and reused by step 5's kill switch.
+   Kill switch and the daily digest were explicitly out of scope for this step and remain step 5.
 5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here). **Not started.**
 6. **Bitunix live adapter (Gate 3).** Smallest viable size, scale after it is earned. **Not started.**
 

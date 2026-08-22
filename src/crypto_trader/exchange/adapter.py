@@ -49,6 +49,7 @@ from abc import ABC, abstractmethod
 from crypto_trader.exchange.types import (
     Balance,
     ExchangeCapabilities,
+    MarketOrderRequest,
     Order,
     OrderRequest,
     Position,
@@ -97,6 +98,18 @@ class ExchangeAdapter(ABC):
         rests the moment the entry is placed (principle 4, PRD 5.1). The returned
         Order carries the venue's order_id and status; a partial fill later surfaces
         as OrderStatus.PARTIALLY_FILLED via get_open_orders/get_positions.
+        """
+
+    @abstractmethod
+    def place_market_order(self, request: MarketOrderRequest) -> Order:
+        """Place a MARKET order that fills at once: the on-demand close/reduce.
+
+        Added between the characterization spike and Build Order step 4: the spike's
+        interface exposed resting limits and native stops but no way to close a position
+        at market, which the strategy's momentum-shift exit requires and step 5's kill
+        switch will reuse. MARKET is a CONFIRMED native Bitunix order type, so this assumes
+        no unconfirmed capability. Reduce-only by intent (see MarketOrderRequest). The
+        returned Order reports the exchange's actual fill price and quantity.
         """
 
     @abstractmethod

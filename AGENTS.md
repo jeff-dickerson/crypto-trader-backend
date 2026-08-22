@@ -189,6 +189,51 @@ Run it with `python -m crypto_trader.backtest` (see README.md).
   Rate limits held with simple pacing: about 5 req/sec (well under the published 10 req/sec/IP), no 429s encountered ingesting 14 symbols x 2 timeframes x up to 33 pages each.
   BTCUSDT, ETHUSDT, and most established majors (SOL, XRP, DOGE, BNB, LINK, SUI, ADA, BCH) reached the full 3-year target window; younger listings (HYPE, BZ, ENA, 1000PEPE) stopped at their listing date, all noted per-symbol in the real report rather than silently padded.
 
+## Architecture decisions from Build Order step 4 (paper loop, Gate 2)
+
+Step 4 is the approve-then-execute paper machine (PRD 6.2, "proves the machine, not the edge").
+It consumes the unmodified step-2 `generate_signal` core, the step-1 candle storage, and the characterization-spike `ExchangeAdapter` interface, and adds the DryRun adapter, risk sizing, the approval seam, the position-manager lifecycle, and reconciliation.
+Run the machine end to end on synthetic data with `python -m crypto_trader.paper --synthetic` (see README.md).
+This task builds the machine only; it does NOT run the 4-week Gate 2 paper window (that is a future operational task), so Gate 2 itself is not satisfied by this task.
+
+- **ExchangeAdapter interface change: `place_market_order` was ADDED (flagged, not silent).**
+  The spike's interface exposed resting limits and native stops but no way to close a position at market, which the strategy's momentum-shift exit requires and step 5's kill-switch flatten will reuse.
+  MARKET is a CONFIRMED native Bitunix order type, so exposing it assumes nothing unconfirmed; the change is purely additive (a new abstract method plus a new `MarketOrderRequest` type, reduce-only by intent), and the existing `test_exchange_adapter.py` stub was updated to implement it.
+  This is the one interface signature change in this step; every other adapter signature is unchanged.
+
+- **DryRun adapter honest fills, faithful to the confirmed venue (`crypto_trader.exchange.dryrun`).**
+  The paper venue is driven one CLOSED candle at a time via `on_candle`, which returns the fills/exits it produced so the caller need not diff state.
+  A resting limit fills only when a STRICTLY LATER candle trades through it (an order carries the clock value at placement), which is the "never filled on the placement candle" guarantee; a stop ALWAYS slips (fills at the trigger moved adversely by the shared cost model's `slippage_rate`, never at the stop price); the worst-of-intrabar rule holds (a stop wins a same-candle tie with the take-profit, and only a same-bar stop breach can close the fill candle).
+  It honours `ExchangeCapabilities`: native stops rest server-side (the bracket's stop is a tracked resting order the instant the entry fills, principle 4), and trailing is emulated by cancel-and-replace because `native_trailing_stop` is False, so the paper branches match what the live adapter (step 6) will do.
+  Slippage and fees are the SAME numbers as the Gate 1 backtest: `DryRunConfig` holds a `backtest.costs.CostConfig`, so there is one slippage source, never two inconsistent ones.
+  Partial fills are an explicit opt-in (`DryRunConfig.partial_fill_ratio`) that exercises the four-state contract end to end; faithful partial-fill microstructure needs order-book depth the 4H/daily data plan does not carry (see "Data plan"), so it is a documented deterministic stand-in, off by default.
+
+- **Risk sizing: tiered schedule, slider, and the kill-switch clamp (`crypto_trader.paper.risk`).**
+  PRD 4.1 tiers (4/3/2% by equity) auto-adjust at every plan from `get_balance()`; the slider (0.25x-2.0x) multiplies the tier base; then a HARD clamp caps the effective per-trade risk STRICTLY BELOW the 6% daily kill switch (captain decision 2).
+  The clamp ceiling is a builder-proposed, overridable `RiskConfig.max_effective_risk_fraction = 0.05` (one whole point below the 6% kill): because a stop always slips, a nominal "1R" stop-out loses slightly MORE than the risk fraction, and 5% keeps even a slipped single-trade stop-out under the daily kill with headroom.
+  The min-notional check runs at PLAN time (PRD 4.2): a plan that cannot meet `SymbolRule.min_notional(price)` (or rounds to zero size) is VOIDED with a visible reason on the plan, never silently dropped.
+  The approval card shows exactly one risk number (`TradePlan.risk_line`, e.g. "Risk: 4% tier, $18.40 on this trade"); tier/slider/clamp arithmetic stays out of the human's view (conduct rules 5, 8).
+
+- **Approval seam: an ABC, fail-closed, with a reserved kill-switch event (`crypto_trader.approval`).**
+  `ApprovalChannel` is an `abc.ABC` for the same reason as `ExchangeAdapter` (money-adjacent, multi-method, two named implementers), so a missing method fails loudly at construction.
+  `request_approval(plan) -> ApprovalDecision` gates submission: an order reaches the exchange ONLY on a recorded APPROVE, and every implementation FAILS CLOSED (a timeout, transport error, or unauthenticated actor returns REJECT, never APPROVE), because an approval bypass is a Gate 2 critical failure.
+  `notify(ChannelEvent)` is one-way; `EventKind` already reserves `KILL_SWITCH_FIRED`/`KILL_SWITCH_REARMED` so step 5 uses this seam without a breaking change.
+  The Telegram surface (`approval.telegram`) is real, complete code over `requests` (no external Telegram library, so nothing to install and the transport is a one-object mock in tests); it reads the token once from the environment (`crypto_trader.secrets`, redacted repr, never logged or stored per PRD 9.4), allowlists exactly one `chat_id` (every other chat is refused), and fails safe when no token is configured (`from_env` returns None with a clear message and the loop uses the in-memory channel).
+
+- **Position-manager lifecycle is driven by exchange truth, not by assumption (`crypto_trader.paper.position_manager`).**
+  Each bar the manager syncs FLAT->PENDING->PARTIAL/OPEN->FLAT from what `get_positions`/`get_open_orders` actually report (governing principle 1), attributing an exchange-side close (stop or take-profit) from the adapter's returned events; it never assumes a placed order executed.
+  It consumes the unmodified `generate_signal` as the single decision authority (entry when FLAT, trailing/momentum management when exposed), so paper, backtest, and live cannot diverge on the decision.
+  The overtrading governor's `traded_zones` memory persists across a closed trade back to FLAT (one zone, one trade).
+
+- **Reconciliation tolerance is defined numerically, in three parts (`crypto_trader.paper.reconciliation`).**
+  A naive equality check false-positives against ordinary funding/fee accrual (design review, PRD 9.2), so "clean match" is: a SIZE epsilon of `size_tolerance_lots` lots at the symbol's `base_precision` (default 1 lot); a PRICE tolerance of `price_tolerance_ticks` ticks at `quote_precision` (default 1 tick, since a re-placed trailed stop is tick-rounded); and a funding/fee ACCRUAL allowance of `equity_accrual_fraction` of notional (default 0.5%) applied to MONETARY comparisons (equity) only, never to size or side (funding never changes those).
+  Protective-stop presence is a hard boolean check (exposure with no reduce-only stop resting is a "stop failed to rest" critical drift).
+  Cadence: reconciliation runs at the END of every decision cycle (each newly-closed 4H bar), after the manager has synced and acted; on a drift the symbol FREEZES (refuses new entries, keeps managing any existing position conservatively) and alerts, and resumes only on a later clean reconciliation.
+
+- **The loop and its Gate 2 audit (`crypto_trader.paper.loop`).**
+  `PaperTrader` ties adapter + manager + reconciliation together bar by bar, reusing the backtest engine's `causal_windows` as the single no-lookahead authority (not re-implemented, so paper and backtest cannot diverge on which candles a decision sees), and replays symbols sequentially over one shared account exactly as the Gate 1 backtest does (true wall-clock interleaving of concurrent symbols is a step-6 concern).
+  At the end of a run it audits the four PRD 6.2 critical-failure classes explicitly (approval bypass, a stop that failed to rest, a fill not traded through, undetected reconciliation drift) and reports `gate2_clean`.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
