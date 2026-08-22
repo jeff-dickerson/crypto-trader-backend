@@ -1,10 +1,12 @@
 """Build Order step 5's ops-and-safety layer: the kill switch and the daily digest.
 
-This package is deliberately independent of the REST API (not yet planned) and reads the paper
-loop's own state through the ExchangeAdapter and ApprovalChannel seams already built in steps 4
-and the characterization spike, so it needs no interface change to either beyond the additive
-ExchangeAdapter.consecutive_api_failures method (see AGENTS.md, "Architecture decisions from
-Build Order step 5").
+This package reads the paper loop's own state through the ExchangeAdapter and ApprovalChannel
+seams already built in steps 4 and the characterization spike, so it needs no interface change to
+either beyond the additive ExchangeAdapter.consecutive_api_failures method (see AGENTS.md,
+"Architecture decisions from Build Order step 5"). The REST API build (a later step) reads this
+package rather than the reverse: KillSwitchMonitor gained an optional persistence sink and a
+derived KillSwitchState so the API can render the kill switch, but safety never imports the API
+layer, preserving the dependency direction.
 
 - equity.py     EquityTracker: the one shared daily-anchor/peak-equity tracker (PRD 9.1/9.5).
 - kill_switch.py  KillSwitch: the armed/triggered state machine, checked before any new entry.
@@ -28,6 +30,7 @@ from crypto_trader.safety.monitor import (
     DEFAULT_KILL_SWITCH_CONFIG,
     KillSwitchConfig,
     KillSwitchMonitor,
+    KillSwitchState,
     websocket_dead_trigger,
 )
 
@@ -44,5 +47,6 @@ __all__ = [
     "DEFAULT_KILL_SWITCH_CONFIG",
     "KillSwitchConfig",
     "KillSwitchMonitor",
+    "KillSwitchState",
     "websocket_dead_trigger",
 ]

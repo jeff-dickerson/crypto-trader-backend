@@ -15,6 +15,11 @@ EXPECTED_TABLES = {
     "journal",
     "config_history",
     "schema_migrations",
+    # REST API tables (migration 002). `signals` is redefined from its 001 placeholder shape.
+    "trade_plans",
+    "plan_decisions",
+    "closed_trades",
+    "kill_switch_events",
 }
 
 

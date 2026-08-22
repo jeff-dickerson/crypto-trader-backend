@@ -32,10 +32,24 @@ class PlanStatus(str, Enum):
     """Where a plan sits in its short lifecycle.
 
     PROPOSED: sized and affordable, awaiting approval.
-    VOID: rejected at plan time (min-notional or a sizing failure); never submitted.
+    VOID: auto-invalidated and never live; reachable from PROPOSED (min-notional, expiry, bias
+        flip) and from SUBMITTED (a resting entry cancelled on invalidation/expiry). Always
+        carries a `void_reason`.
     APPROVED: a human approved it; the position manager will submit it.
     REJECTED: a human rejected it; it will not be submitted.
     SUBMITTED: the entry order has been placed on the exchange.
+    FAILED: submission after an APPROVE failed at the exchange; the exchange's reason is recorded
+        (`void_reason` carries the failure text) and the plan stays visible in the approvals list.
+    FILLED: the submitted entry order got its first fill, so the plan's job ends and the position
+        lifecycle takes over. PARTIALLY_FILLED onward is owned by PositionState, not the plan, so
+        there is deliberately no PARTIALLY_FILLED plan status: a first partial fill still moves the
+        plan to FILLED (the trading lifecycle has started).
+
+    State machine (the REST API's contract):
+        PROPOSED -> APPROVED -> SUBMITTED -> FILLED
+          |            |            |
+        REJECTED     VOID        FAILED
+        (PROPOSED and SUBMITTED can also reach VOID on auto-invalidation/expiry.)
     """
 
     PROPOSED = "proposed"
@@ -43,6 +57,8 @@ class PlanStatus(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     SUBMITTED = "submitted"
+    FAILED = "failed"
+    FILLED = "filled"
 
 
 @dataclass(frozen=True)
@@ -115,6 +131,14 @@ class TradePlan:
 
     def submitted(self) -> "TradePlan":
         return _replace(self, status=PlanStatus.SUBMITTED)
+
+    def failed(self, reason: str) -> "TradePlan":
+        """Submission after an approve failed at the exchange; keep the reason visible."""
+        return _replace(self, status=PlanStatus.FAILED, void_reason=reason)
+
+    def filled(self) -> "TradePlan":
+        """The entry order got its first fill; the plan's job ends here (see PlanStatus)."""
+        return _replace(self, status=PlanStatus.FILLED)
 
 
 def _replace(plan: TradePlan, **changes: object) -> TradePlan:

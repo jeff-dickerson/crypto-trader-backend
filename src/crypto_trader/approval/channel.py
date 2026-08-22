@@ -74,6 +74,10 @@ class EventKind(str, Enum):
     """The kind of a one-way channel notification.
 
     PLAN_VOIDED and PLAN_REJECTED explain why a signal did not become a live order.
+    PLAN_PROPOSED / PLAN_FAILED were added for the REST API's async approval surface: a plan
+    parked awaiting an operator decision (PLAN_PROPOSED), and an approved plan whose in-process
+    submission failed at the exchange (PLAN_FAILED, which fires the Telegram alert per the plan's
+    failure path).
     ORDER_SUBMITTED / ENTRY_FILLED / POSITION_EXITED track a trade through its life.
     RECONCILIATION_DRIFT / SYMBOL_FROZEN / SYMBOL_RESUMED cover the reconciler's alerts.
     KILL_SWITCH_FIRED / KILL_SWITCH_REARMED were RESERVED for Build Order step 5, and step 5 now
@@ -85,6 +89,8 @@ class EventKind(str, Enum):
 
     PLAN_VOIDED = "plan_voided"
     PLAN_REJECTED = "plan_rejected"
+    PLAN_PROPOSED = "plan_proposed"
+    PLAN_FAILED = "plan_failed"
     ORDER_SUBMITTED = "order_submitted"
     ENTRY_FILLED = "entry_filled"
     POSITION_EXITED = "position_exited"
