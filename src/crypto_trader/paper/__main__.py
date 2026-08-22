@@ -31,6 +31,9 @@ from crypto_trader.backtest.synthetic import generate_dataset
 from crypto_trader.exchange.dryrun import DryRunConfig, DryRunExchangeAdapter
 from crypto_trader.paper.loop import PaperRunResult, PaperTrader
 from crypto_trader.paper.position_manager import PositionManager
+from crypto_trader.safety.digest import DailyDigestScheduler
+from crypto_trader.safety.kill_switch import KillSwitch
+from crypto_trader.safety.monitor import KillSwitchMonitor
 from crypto_trader.strategy.config import DEFAULT_STRATEGY_CONFIG
 
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +81,16 @@ def _print_summary(result: PaperRunResult) -> None:
             print(f"  - {failure}")
 
 
+def _print_kill_switch(kill_switch: KillSwitch) -> None:
+    if kill_switch.is_armed:
+        print("Kill switch: ARMED (never triggered)")
+        return
+    event = kill_switch.last_event
+    reason = event.reason.value if event is not None else "unknown"
+    confirmed = "confirmed flat" if kill_switch.flatten_confirmed else "flatten NOT yet confirmed"
+    print(f"Kill switch: TRIGGERED ({reason}, {confirmed}); requires a manual rearm to resume")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Gate 2 paper loop.")
     parser.add_argument("--synthetic", action="store_true", help="use deterministic synthetic data")
@@ -94,10 +107,21 @@ def main() -> None:
     dataset = generate_dataset(["BTCUSDT", "ETHUSDT"], years=args.years, seed=args.seed)
     adapter = DryRunExchangeAdapter(DryRunConfig())
     approval = _build_approval(adapter)
-    manager = PositionManager(adapter, approval, strategy_config=DEFAULT_STRATEGY_CONFIG)
-    trader = PaperTrader(adapter, manager, strategy_config=DEFAULT_STRATEGY_CONFIG)
+    kill_switch = KillSwitch()
+    monitor = KillSwitchMonitor(adapter, approval, kill_switch)
+    manager = PositionManager(
+        adapter, approval, strategy_config=DEFAULT_STRATEGY_CONFIG, kill_switch=kill_switch
+    )
+    trader = PaperTrader(
+        adapter,
+        manager,
+        strategy_config=DEFAULT_STRATEGY_CONFIG,
+        kill_switch_monitor=monitor,
+        digest_scheduler=DailyDigestScheduler(),
+    )
     result = trader.run(dataset)
     _print_summary(result)
+    _print_kill_switch(kill_switch)
 
 
 if __name__ == "__main__":

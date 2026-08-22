@@ -38,6 +38,12 @@ flatten. A market order does not rest, so the "subsequent candle" rule does not 
 
 This adapter touches no network and no exchange credentials: it is pure simulation over
 candle data supplied by the caller.
+
+`simulate_outage` and `consecutive_api_failures` (Build Order step 5, AGENTS.md) exist so the
+kill switch's "5 consecutive API failures" auto-trigger and its degraded-mode flatten-retry
+fallback can be exercised without a live venue: every method that represents a real venue round
+trip calls the shared `_guard()` helper, which raises ExchangeConnectionError while a simulated
+outage is in effect and otherwise resets the tracked failure count.
 """
 
 from __future__ import annotations
@@ -47,7 +53,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from crypto_trader.backtest.costs import CostConfig
-from crypto_trader.exchange.adapter import ExchangeAdapter
+from crypto_trader.exchange.adapter import ExchangeAdapter, ExchangeConnectionError
 from crypto_trader.exchange.types import (
     Balance,
     ExchangeCapabilities,
@@ -204,6 +210,12 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         # "fills only on a subsequent candle" rule has a total order to compare against.
         self._clock: int = -1
         self._ids = itertools.count(1)
+        # Kill-switch support (Build Order step 5, AGENTS.md): DryRun has no real network, so a
+        # transport failure is injected explicitly via simulate_outage rather than occurring
+        # spontaneously. _consecutive_failures mirrors what the live adapter (step 6) would track
+        # from real transport failures.
+        self._simulated_outage_calls = 0
+        self._consecutive_failures = 0
 
     # ------------------------------------------------------------------ ExchangeAdapter API
 
@@ -219,6 +231,32 @@ class DryRunExchangeAdapter(ExchangeAdapter):
                 f"no symbol rule configured for {symbol!r} in the DryRun adapter"
             ) from None
 
+    def simulate_outage(self, calls: int) -> None:
+        """Test/simulation hook: makes the next `calls` guarded adapter calls raise
+        ExchangeConnectionError instead of executing.
+
+        DryRun has no real network, so a transport failure must be injected explicitly to
+        exercise the kill switch's "5 consecutive API failures" auto-trigger and its
+        degraded-mode flatten-retry fallback (PRD 9.1, AGENTS.md) without a live venue. Each
+        simulated failure also increments consecutive_api_failures(); any guarded call that
+        succeeds resets it to 0.
+        """
+        self._simulated_outage_calls = calls
+
+    def consecutive_api_failures(self) -> int:
+        return self._consecutive_failures
+
+    def _guard(self) -> None:
+        """Raise ExchangeConnectionError while a simulated outage is in effect, else record
+        success. Called at the top of every method that represents a real venue round trip."""
+        if self._simulated_outage_calls > 0:
+            self._simulated_outage_calls -= 1
+            self._consecutive_failures += 1
+            raise ExchangeConnectionError(
+                "simulated exchange outage (DryRunExchangeAdapter.simulate_outage)"
+            )
+        self._consecutive_failures = 0
+
     def place_limit_order(self, request: OrderRequest) -> Order:
         """Rest a limit order. A non-reduce-only limit is the entry; reduce-only is a TP.
 
@@ -226,6 +264,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         atomic bracket); those become real resting STOP/TAKE_PROFIT orders the instant the
         entry fills, so the protective stop rests server-side without a second round trip.
         """
+        self._guard()
         role = _Role.TAKE_PROFIT if request.reduce_only else _Role.ENTRY
         order = _SimOrder(
             order_id=self._new_id(),
@@ -247,6 +286,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
 
     def place_stop_order(self, request: StopOrderRequest) -> Order:
         """Rest a native server-side stop (a MARKET gated on the trigger). The safety floor."""
+        self._guard()
         order = _SimOrder(
             order_id=self._new_id(),
             symbol=request.symbol,
@@ -271,6 +311,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         seen) or no position to reduce, because a paper market order must be honest about not
         being fillable rather than inventing a price.
         """
+        self._guard()
         symbol = request.symbol
         mark = self._marks.get(symbol)
         if mark is None:
@@ -300,6 +341,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         )
 
     def cancel_order(self, symbol: str, order_id: str) -> Order:
+        self._guard()
         order = self._orders.get(order_id)
         if order is None or order.symbol != symbol:
             raise KeyError(f"no open order {order_id!r} for {symbol}")
@@ -308,6 +350,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         return order.to_public()
 
     def get_open_orders(self, symbol: str | None = None) -> list[Order]:
+        self._guard()
         return [
             o.to_public()
             for o in self._orders.values()
@@ -315,6 +358,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         ]
 
     def get_positions(self, symbol: str | None = None) -> list[Position]:
+        self._guard()
         out: list[Position] = []
         for pos in self._positions.values():
             if symbol is not None and pos.symbol != symbol:
@@ -333,6 +377,7 @@ class DryRunExchangeAdapter(ExchangeAdapter):
         return out
 
     def get_balance(self) -> Balance:
+        self._guard()
         unrealized = sum(self._unrealized(p) for p in self._positions.values())
         return Balance(
             currency=self._config.currency,

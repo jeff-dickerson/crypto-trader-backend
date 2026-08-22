@@ -20,6 +20,7 @@ from crypto_trader.ingest.models import Candle
 from crypto_trader.paper.loop import PaperTrader
 from crypto_trader.paper.position_manager import PositionManager
 from crypto_trader.paper.risk import size_trade_plan
+from crypto_trader.safety.kill_switch import KillSwitch, KillSwitchReason
 from crypto_trader.strategy.config import DEFAULT_STRATEGY_CONFIG
 from crypto_trader.strategy.position import PositionSide, PositionStatus
 
@@ -217,3 +218,44 @@ def test_frozen_symbol_refuses_new_entries() -> None:
     manager.set_frozen(SYMBOL, False)
     manager.on_bar(SYMBOL, last, h4[last], h4, d1, [])
     assert approval.requests, "the same bar should propose an entry once unfrozen"
+
+
+# --------------------------------------------------------------------------- kill switch (step 5)
+
+
+def test_a_triggered_kill_switch_refuses_new_entries_account_wide() -> None:
+    from tests.fixtures.strategy_candles import (
+        TEST_STRATEGY_CONFIG,
+        long_entry_window,
+        rising_daily,
+    )
+
+    adapter = DryRunExchangeAdapter(DryRunConfig(symbol_rules={SYMBOL: RULE}))
+    approval = InMemoryApprovalChannel(default_verdict=ApprovalVerdict.APPROVE)
+    kill_switch = KillSwitch()
+    manager = PositionManager(
+        adapter, approval, strategy_config=TEST_STRATEGY_CONFIG, kill_switch=kill_switch
+    )
+    h4 = long_entry_window()
+    d1 = rising_daily(count=12)
+    last = len(h4) - 1
+
+    kill_switch.trigger(KillSwitchReason.MANUAL, "test halt", now=_BASE)
+    adapter.on_candle(h4[last])
+    manager.on_bar(SYMBOL, last, h4[last], h4, d1, [])
+    assert approval.requests == []  # halted: no plan even proposed
+    assert manager.submitted_order_plan_ids == []
+
+    # Rearming lets the very same setup propose a plan, proving the kill switch was the blocker.
+    kill_switch.rearm()
+    manager.on_bar(SYMBOL, last, h4[last], h4, d1, [])
+    assert approval.requests, "the same bar should propose an entry once rearmed"
+
+
+def test_no_kill_switch_injected_preserves_prior_behaviour() -> None:
+    # Every pre-step-5 call site constructs PositionManager without a kill_switch; it must keep
+    # working exactly as before (no gate at all).
+    adapter = DryRunExchangeAdapter(DryRunConfig(symbol_rules={SYMBOL: RULE}))
+    approval = InMemoryApprovalChannel(default_verdict=ApprovalVerdict.APPROVE)
+    manager = PositionManager(adapter, approval, strategy_config=DEFAULT_STRATEGY_CONFIG)
+    assert manager._kill_switch is None

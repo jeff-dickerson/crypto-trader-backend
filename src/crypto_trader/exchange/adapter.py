@@ -59,6 +59,18 @@ from crypto_trader.exchange.types import (
 )
 
 
+class ExchangeConnectionError(RuntimeError):
+    """Raised by an ExchangeAdapter method when a call cannot reach the venue.
+
+    Added for Build Order step 5 (the kill switch, AGENTS.md): the degraded-mode fallback needs
+    a way to tell "the venue rejected this" apart from "the venue could not be reached at all",
+    since only the latter should retry-with-backoff rather than fail outright. The live adapter
+    (step 6) raises this on a real transport/HTTP failure; the paper venue has no real network,
+    so DryRunExchangeAdapter raises it only via an explicit simulation hook
+    (simulate_outage), never spontaneously.
+    """
+
+
 class ExchangeAdapter(ABC):
     """A venue the bot can trade through: paper (DryRun) or live Bitunix.
 
@@ -149,4 +161,16 @@ class ExchangeAdapter(ABC):
 
         Bitunix returns no weight/quota headers, so an implementation tracks its own
         request budget against the venue's fixed caps and reports it here.
+        """
+
+    @abstractmethod
+    def consecutive_api_failures(self) -> int:
+        """How many consecutive calls to this venue have failed, as tracked by the adapter.
+
+        Added for Build Order step 5's kill switch (PRD 9.1's "5 consecutive API failures"
+        auto-trigger, AGENTS.md): additive, matching the pattern already used for
+        place_market_order. Resets to 0 on any call that succeeds. The live adapter (step 6)
+        increments this on a real transport/HTTP failure (raising ExchangeConnectionError);
+        DryRunExchangeAdapter has no real network, so it tracks the same counter via an explicit
+        simulation hook (simulate_outage) rather than fabricating real failures.
         """

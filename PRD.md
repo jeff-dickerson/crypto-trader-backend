@@ -226,9 +226,13 @@ Regardless of deferral, conduct rule 2 (E2E-first bug reproduction) and the "pap
 Triggers on all interfaces: cancels orders, closes at market, halts signal generation, requires re-arm.
 Auto-triggers: 6% daily loss, 15% max drawdown, 5 consecutive API failures, websocket dead for more than 5 minutes with open positions.
 
-**Open risk, not yet resolved by implementation or by any captain decision (from design review):** two of the kill switch's own auto-triggers are API failure and a dead websocket, which are exactly the conditions where its own remedy (cancel and flatten via that same API) may not be able to execute.
-This needs a defined degraded-mode fallback before the live adapter (Build Order step 6) ships: when flatten cannot reach the exchange, rely on the on-exchange resting stops as the stated floor, keep retrying cancel/flatten with backoff, alert loudly and repeatedly, and do not report "killed" until the exchange confirms flat.
-A related, separate judgment call flagged by the same review: auto-flattening at market purely because the websocket dropped can fight the "on-exchange stops are the floor" principle if REST and the resting stops are actually fine; consider preferring alert-and-hold over market-flatten in that case, reserving auto-flatten for when the stops themselves cannot be confirmed present.
+**Built in Build Order step 5** (`src/crypto_trader/safety/`, see AGENTS.md for the full architecture): a `KillSwitch` state machine (`is_armed`, `trigger()`, `rearm()`) that `PositionManager` checks before any new entry, and a `KillSwitchMonitor` that evaluates the daily-loss, max-drawdown, and consecutive-API-failure auto-triggers once per decision cycle and drives the flatten.
+Both open risks from the design review are now resolved by implementation:
+
+1. **Degraded-mode fallback: resolved.** `KillSwitch.is_armed` goes False the instant a trigger fires, independent of whether the exchange-side flatten below succeeds, so a degraded exchange can never block the halt.
+   Separately, `flatten_confirmed` stays False until the exchange has genuinely confirmed no positions or orders remain: the monitor retries cancel/flatten with backoff, alerts repeatedly through the existing `ApprovalChannel`, and relies on each position's already-resting on-exchange stop as the floor in the meantime, retrying across cycles (not just within one burst of attempts) until confirmed.
+2. **Websocket-loss judgment call: still genuinely open, by design, until Build Order step 6.** The paper/DryRun adapter has no real websocket, so this auto-trigger is N/A for now: `websocket_dead_trigger` implements the trigger CONDITION as a pure, tested function ready for the live adapter to call, but nothing fabricates a heartbeat timestamp to fire it, and nothing here decides whether the resulting ACTION should be auto-flatten or alert-and-hold.
+   That decision is left for Build Order step 6 to make explicitly, documented inline at the point of use and in AGENTS.md, matching the task brief's instruction not to silently pick one behavior now for a trigger that cannot fire yet.
 
 ### 9.2 Exchange downtime and reconciliation
 
@@ -273,6 +277,9 @@ Design review notes two soft spots worth closing: the local gitleaks pre-commit 
 
 A daily digest; silence means the bot died.
 
+**Built in Build Order step 5** (`crypto_trader.safety.digest`): once a day, through the existing `ApprovalChannel`, six lines (equity, today's P&L, drawdown, open positions, kill-switch state, rate-limit/API health), degrading honestly rather than skipping the send when the exchange cannot be reached.
+Detecting a MISSED digest (the heartbeat property this section names) is explicitly not built: a dead process cannot alert about its own silence, so that needs an external watcher independent of this process, noted as future ops work in the module docstring rather than implemented here.
+
 ## 10. Data and storage
 
 - One unified SQLite file: 4H and daily candles (3+ year retention, whole universe), all trades, signals, and journal entries forever (never pruned), config history.
@@ -304,8 +311,13 @@ Python, Docker (bot process container; a second web UI container is future work 
    Built in `src/crypto_trader/paper/` (risk sizing with the tiered schedule and the kill-switch clamp, the position-manager lifecycle, reconciliation, and the `PaperTrader` loop), `src/crypto_trader/exchange/dryrun.py` (the honest-fills DryRun adapter), and `src/crypto_trader/approval/` (the approval seam, an in-memory fake, and a real Telegram surface that fails safe when no token is configured); see section 6.2 and [AGENTS.md](AGENTS.md).
    The `ExchangeAdapter` interface gained one additive method, `place_market_order` (MARKET is confirmed native), needed for the momentum-shift exit and reused by step 5's kill switch.
    Kill switch and the daily digest were explicitly out of scope for this step and remain step 5.
-5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here). **Not started.**
+5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here). **Backend half done: the kill switch and the daily digest.**
+   The read-only TUI and the web UI are covered by the separate `crypto-trader-web` app (its Terminal monitor screen substitutes for the TUI), out of this repo's scope.
+   Built in `src/crypto_trader/safety/`: `KillSwitch` (armed/triggered state, checked by `PositionManager` before any new entry), `KillSwitchMonitor` (the daily-loss/max-drawdown/API-failure auto-triggers plus the degraded-mode flatten-retry fallback), `EquityTracker` (the one shared equity source for both the kill switch and the digest), and the daily digest/heartbeat delivered through the existing `ApprovalChannel`.
+   Both PRD 9.1 open risks are now resolved: the degraded-mode fallback is implemented, and the websocket-dead trigger's condition is written and tested but deliberately left unwired (N/A for the paper adapter, which has no real websocket) with its auto-flatten-vs-alert-and-hold judgment call left for step 6 to decide explicitly.
+   The one interface change is additive: `ExchangeAdapter.consecutive_api_failures()`, matching the `place_market_order` precedent from step 4.
 6. **Bitunix live adapter (Gate 3).** Smallest viable size, scale after it is earned. **Not started.**
+   Inherits two explicit decisions from step 5: resolve the candle-anchor MUST-VERIFY note (AGENTS.md) against real Bitunix behavior, and decide the websocket-dead auto-trigger's action (auto-flatten vs. alert-and-hold) before wiring `websocket_dead_trigger` to a real heartbeat.
 
 ## 13. Deferred to v2+
 
