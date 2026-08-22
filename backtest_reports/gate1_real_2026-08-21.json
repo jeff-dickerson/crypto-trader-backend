@@ -1,0 +1,477 @@
+{
+  "generated_at": "2026-08-22T01:47:07.817614+00:00",
+  "data_description": "real ingested candles from /tmp/claude-1000/-home-jadickerson--treehouse-crypto-trader-2f38bd-1-crypto-trader/1a32d9fa-dd46-4401-ad39-cdae87551670/scratchpad/real_gate1.sqlite3",
+  "is_synthetic": false,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "HYPEUSDT",
+    "BZUSDT",
+    "ENAUSDT",
+    "BNBUSDT",
+    "LINKUSDT",
+    "1000PEPEUSDT",
+    "SUIUSDT",
+    "ADAUSDT",
+    "BCHUSDT"
+  ],
+  "timeline": {
+    "start": "2023-08-17T12:00:00+00:00",
+    "end": "2026-08-22T00:00:00+00:00",
+    "split": "2025-08-20T04:00:00+00:00"
+  },
+  "gate1_verdict": "NOT PASSED",
+  "cost_config": {
+    "maker_fee_rate": 0.0002,
+    "taker_fee_rate": 0.0006,
+    "slippage_rate": 0.0005,
+    "min_notional": 5.0,
+    "assumed_equity": 2000.0,
+    "risk_fraction": 0.02
+  },
+  "funding_description": "no funding schedule loaded (database mode); funding cost is 0",
+  "chosen_index": 0,
+  "combinations": [
+    {
+      "lookback_days": 45,
+      "funding_filter_enabled": false,
+      "counts": {
+        "setups": 124,
+        "funding_filtered": 0,
+        "min_notional_voided": 0,
+        "signals": 124,
+        "fills": 98,
+        "closed": 98,
+        "open_at_end": 0
+      },
+      "in_sample": {
+        "n": 65,
+        "mean_r": -0.14536158732682405,
+        "sd_r": 0.7234605700389001,
+        "se_r": 0.08973423979053244,
+        "t_stat": -1.6199121725011891,
+        "ci_bootstrap": [
+          -0.3134924277542845,
+          0.03537189981029413
+        ],
+        "ci_normal": [
+          -0.3212374654963487,
+          0.030514290842700575
+        ],
+        "ci_excludes_zero": false,
+        "positive_edge_proven": false,
+        "win_rate": 0.4,
+        "payoff": 0.8932887215047591,
+        "avg_win_r": 0.5350562578181066,
+        "avg_loss_r": 0.5989734840901112,
+        "total_r": -9.448503176243564,
+        "max_drawdown_r": 9.620560304627313,
+        "max_drawdown_pct": 0.1803103300294714,
+        "exit_counts": {
+          "stop": 15,
+          "trailing_stop": 0,
+          "take_profit": 2,
+          "momentum_shift": 48
+        }
+      },
+      "out_of_sample": {
+        "n": 33,
+        "mean_r": -0.16254973429491767,
+        "sd_r": 0.861023254085694,
+        "se_r": 0.14988490979458485,
+        "t_stat": -1.0844969951790997,
+        "ci_bootstrap": [
+          -0.447655460718762,
+          0.15621207894729794
+        ],
+        "ci_normal": [
+          -0.45631875931833876,
+          0.13121929072850344
+        ],
+        "ci_excludes_zero": false,
+        "positive_edge_proven": false,
+        "win_rate": 0.3333333333333333,
+        "payoff": 1.1891715157254987,
+        "avg_win_r": 0.7151926122275595,
+        "avg_loss_r": 0.6014209075561563,
+        "total_r": -5.364141231732283,
+        "max_drawdown_r": 5.364141231732283,
+        "max_drawdown_pct": 0.10611314145667616,
+        "exit_counts": {
+          "stop": 9,
+          "trailing_stop": 0,
+          "take_profit": 3,
+          "momentum_shift": 21
+        }
+      }
+    },
+    {
+      "lookback_days": 45,
+      "funding_filter_enabled": true,
+      "counts": {
+        "setups": 124,
+        "funding_filtered": 0,
+        "min_notional_voided": 0,
+        "signals": 124,
+        "fills": 98,
+        "closed": 98,
+        "open_at_end": 0
+      },
+      "in_sample": {
+        "n": 65,
+        "mean_r": -0.14536158732682405,
+        "sd_r": 0.7234605700389001,
+        "se_r": 0.08973423979053244,
+        "t_stat": -1.6199121725011891,
+        "ci_bootstrap": [
+          -0.3134924277542845,
+          0.03537189981029413
+        ],
+        "ci_normal": [
+          -0.3212374654963487,
+          0.030514290842700575
+        ],
+        "ci_excludes_zero": false,
+        "positive_edge_proven": false,
+        "win_rate": 0.4,
+        "payoff": 0.8932887215047591,
+        "avg_win_r": 0.5350562578181066,
+        "avg_loss_r": 0.5989734840901112,
+        "total_r": -9.448503176243564,
+        "max_drawdown_r": 9.620560304627313,
+        "max_drawdown_pct": 0.1803103300294714,
+        "exit_counts": {
+          "stop": 15,
+          "trailing_stop": 0,
+          "take_profit": 2,
+          "momentum_shift": 48
+        }
+      },
+      "out_of_sample": {
+        "n": 33,
+        "mean_r": -0.16254973429491767,
+        "sd_r": 0.861023254085694,
+        "se_r": 0.14988490979458485,
+        "t_stat": -1.0844969951790997,
+        "ci_bootstrap": [
+          -0.447655460718762,
+          0.15621207894729794
+        ],
+        "ci_normal": [
+          -0.45631875931833876,
+          0.13121929072850344
+        ],
+        "ci_excludes_zero": false,
+        "positive_edge_proven": false,
+        "win_rate": 0.3333333333333333,
+        "payoff": 1.1891715157254987,
+        "avg_win_r": 0.7151926122275595,
+        "avg_loss_r": 0.6014209075561563,
+        "total_r": -5.364141231732283,
+        "max_drawdown_r": 5.364141231732283,
+        "max_drawdown_pct": 0.10611314145667616,
+        "exit_counts": {
+          "stop": 9,
+          "trailing_stop": 0,
+          "take_profit": 3,
+          "momentum_shift": 21
+        }
+      }
+    },
+    {
+      "lookback_days": 60,
+      "funding_filter_enabled": false,
+      "counts": {
+        "setups": 50,
+        "funding_filtered": 0,
+        "min_notional_voided": 0,
+        "signals": 50,
+        "fills": 39,
+        "closed": 39,
+        "open_at_end": 0
+      },
+      "in_sample": {
+        "n": 30,
+        "mean_r": -0.4150829366874729,
+        "sd_r": 0.6790693427468437,
+        "se_r": 0.12398053237755115,
+        "t_stat": -3.3479686586878294,
+        "ci_bootstrap": [
+          -0.6590747742420283,
+          -0.17232074389597601
+        ],
+        "ci_normal": [
+          -0.6580803149315753,
+          -0.1720855584433706
+        ],
+        "ci_excludes_zero": true,
+        "positive_edge_proven": false,
+        "win_rate": 0.3333333333333333,
+        "payoff": 0.4786758106225111,
+        "avg_win_r": 0.39181029772967185,
+        "avg_loss_r": 0.8185295538960453,
+        "total_r": -12.452488100624187,
+        "max_drawdown_r": 12.968076824173112,
+        "max_drawdown_pct": 0.231323757894483,
+        "exit_counts": {
+          "stop": 14,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 16
+        }
+      },
+      "out_of_sample": {
+        "n": 9,
+        "mean_r": -0.37027608005601453,
+        "sd_r": 0.5450205998430209,
+        "se_r": 0.18167353328100697,
+        "t_stat": -2.0381399170746737,
+        "ci_bootstrap": [
+          -0.7009730458545993,
+          -0.044611776659196446
+        ],
+        "ci_normal": [
+          -0.7263496622309271,
+          -0.014202497881102005
+        ],
+        "ci_excludes_zero": true,
+        "positive_edge_proven": false,
+        "win_rate": 0.3333333333333333,
+        "payoff": 0.28082918745625396,
+        "avg_win_r": 0.18145549576209677,
+        "avg_loss_r": 0.6461418679650701,
+        "total_r": -3.3324847205041306,
+        "max_drawdown_r": 3.5289518431602844,
+        "max_drawdown_pct": 0.06878517282014639,
+        "exit_counts": {
+          "stop": 3,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 6
+        }
+      }
+    },
+    {
+      "lookback_days": 60,
+      "funding_filter_enabled": true,
+      "counts": {
+        "setups": 50,
+        "funding_filtered": 0,
+        "min_notional_voided": 0,
+        "signals": 50,
+        "fills": 39,
+        "closed": 39,
+        "open_at_end": 0
+      },
+      "in_sample": {
+        "n": 30,
+        "mean_r": -0.4150829366874729,
+        "sd_r": 0.6790693427468437,
+        "se_r": 0.12398053237755115,
+        "t_stat": -3.3479686586878294,
+        "ci_bootstrap": [
+          -0.6590747742420283,
+          -0.17232074389597601
+        ],
+        "ci_normal": [
+          -0.6580803149315753,
+          -0.1720855584433706
+        ],
+        "ci_excludes_zero": true,
+        "positive_edge_proven": false,
+        "win_rate": 0.3333333333333333,
+        "payoff": 0.4786758106225111,
+        "avg_win_r": 0.39181029772967185,
+        "avg_loss_r": 0.8185295538960453,
+        "total_r": -12.452488100624187,
+        "max_drawdown_r": 12.968076824173112,
+        "max_drawdown_pct": 0.231323757894483,
+        "exit_counts": {
+          "stop": 14,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 16
+        }
+      },
+      "out_of_sample": {
+        "n": 9,
+        "mean_r": -0.37027608005601453,
+        "sd_r": 0.5450205998430209,
+        "se_r": 0.18167353328100697,
+        "t_stat": -2.0381399170746737,
+        "ci_bootstrap": [
+          -0.7009730458545993,
+          -0.044611776659196446
+        ],
+        "ci_normal": [
+          -0.7263496622309271,
+          -0.014202497881102005
+        ],
+        "ci_excludes_zero": true,
+        "positive_edge_proven": false,
+        "win_rate": 0.3333333333333333,
+        "payoff": 0.28082918745625396,
+        "avg_win_r": 0.18145549576209677,
+        "avg_loss_r": 0.6461418679650701,
+        "total_r": -3.3324847205041306,
+        "max_drawdown_r": 3.5289518431602844,
+        "max_drawdown_pct": 0.06878517282014639,
+        "exit_counts": {
+          "stop": 3,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 6
+        }
+      }
+    },
+    {
+      "lookback_days": 75,
+      "funding_filter_enabled": false,
+      "counts": {
+        "setups": 46,
+        "funding_filtered": 0,
+        "min_notional_voided": 0,
+        "signals": 46,
+        "fills": 33,
+        "closed": 33,
+        "open_at_end": 0
+      },
+      "in_sample": {
+        "n": 29,
+        "mean_r": -0.4090082283717123,
+        "sd_r": 0.6620000797936169,
+        "se_r": 0.122930328690511,
+        "t_stat": -3.3271547609819714,
+        "ci_bootstrap": [
+          -0.6474913338796291,
+          -0.1500720775059745
+        ],
+        "ci_normal": [
+          -0.6499472452127848,
+          -0.16806921153063983
+        ],
+        "ci_excludes_zero": true,
+        "positive_edge_proven": false,
+        "win_rate": 0.3103448275862069,
+        "payoff": 0.5014057310621365,
+        "avg_win_r": 0.384009764712714,
+        "avg_loss_r": 0.7658663252597042,
+        "total_r": -11.861238622779657,
+        "max_drawdown_r": 11.86123862277966,
+        "max_drawdown_pct": 0.21391391796389725,
+        "exit_counts": {
+          "stop": 12,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 17
+        }
+      },
+      "out_of_sample": {
+        "n": 4,
+        "mean_r": -0.26059248976704563,
+        "sd_r": 0.5654323682139437,
+        "se_r": 0.28271618410697186,
+        "t_stat": -0.9217459219400215,
+        "ci_bootstrap": [
+          -0.7795679261920767,
+          0.13249176876706484
+        ],
+        "ci_normal": [
+          -0.8147060284633056,
+          0.2935210489292144
+        ],
+        "ci_excludes_zero": false,
+        "positive_edge_proven": false,
+        "win_rate": 0.5,
+        "payoff": 0.20268698421872644,
+        "avg_win_r": 0.13249176876706484,
+        "avg_loss_r": 0.6536767483011561,
+        "total_r": -1.0423699590681825,
+        "max_drawdown_r": 1.3073534966023121,
+        "max_drawdown_pct": 0.026042546241603806,
+        "exit_counts": {
+          "stop": 1,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 3
+        }
+      }
+    },
+    {
+      "lookback_days": 75,
+      "funding_filter_enabled": true,
+      "counts": {
+        "setups": 46,
+        "funding_filtered": 0,
+        "min_notional_voided": 0,
+        "signals": 46,
+        "fills": 33,
+        "closed": 33,
+        "open_at_end": 0
+      },
+      "in_sample": {
+        "n": 29,
+        "mean_r": -0.4090082283717123,
+        "sd_r": 0.6620000797936169,
+        "se_r": 0.122930328690511,
+        "t_stat": -3.3271547609819714,
+        "ci_bootstrap": [
+          -0.6474913338796291,
+          -0.1500720775059745
+        ],
+        "ci_normal": [
+          -0.6499472452127848,
+          -0.16806921153063983
+        ],
+        "ci_excludes_zero": true,
+        "positive_edge_proven": false,
+        "win_rate": 0.3103448275862069,
+        "payoff": 0.5014057310621365,
+        "avg_win_r": 0.384009764712714,
+        "avg_loss_r": 0.7658663252597042,
+        "total_r": -11.861238622779657,
+        "max_drawdown_r": 11.86123862277966,
+        "max_drawdown_pct": 0.21391391796389725,
+        "exit_counts": {
+          "stop": 12,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 17
+        }
+      },
+      "out_of_sample": {
+        "n": 4,
+        "mean_r": -0.26059248976704563,
+        "sd_r": 0.5654323682139437,
+        "se_r": 0.28271618410697186,
+        "t_stat": -0.9217459219400215,
+        "ci_bootstrap": [
+          -0.7795679261920767,
+          0.13249176876706484
+        ],
+        "ci_normal": [
+          -0.8147060284633056,
+          0.2935210489292144
+        ],
+        "ci_excludes_zero": false,
+        "positive_edge_proven": false,
+        "win_rate": 0.5,
+        "payoff": 0.20268698421872644,
+        "avg_win_r": 0.13249176876706484,
+        "avg_loss_r": 0.6536767483011561,
+        "total_r": -1.0423699590681825,
+        "max_drawdown_r": 1.3073534966023121,
+        "max_drawdown_pct": 0.026042546241603806,
+        "exit_counts": {
+          "stop": 1,
+          "trailing_stop": 0,
+          "take_profit": 0,
+          "momentum_shift": 3
+        }
+      }
+    }
+  ]
+}

@@ -66,6 +66,25 @@ def test_re_ingesting_the_same_candles_is_idempotent(db_conn: sqlite3.Connection
     assert row_count == 4
 
 
+def test_ingest_symbol_pages_backward_with_end_time_ms(db_conn: sqlite3.Connection):
+    # end_time_ms lets a caller page backward past the source's row cap to reach
+    # deep history: only candles at or before it should be fetched and stored.
+    candles = clean_4h_sequence(count=5)
+    source = FixtureCandleSource({(SYMBOL, Timeframe.H4): candles})
+    cutoff = candles[2].open_time_ms
+
+    result = ingest_symbol(
+        db_conn, source, SYMBOL, Timeframe.H4, end_time_ms=cutoff, now=FIXED_NOW
+    )
+
+    assert len(result.accepted) == 3
+    assert max(c.open_time_ms for c in result.accepted) == cutoff
+    row_count = db_conn.execute(
+        "SELECT COUNT(*) FROM candles_4h WHERE symbol = ?", (SYMBOL,)
+    ).fetchone()[0]
+    assert row_count == 3
+
+
 def test_ingest_reports_issues_for_duplicate_input(db_conn: sqlite3.Connection):
     candles = with_duplicate(clean_4h_sequence(count=3))
     source = FixtureCandleSource({(SYMBOL, Timeframe.H4): candles})
