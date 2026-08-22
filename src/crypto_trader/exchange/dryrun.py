@@ -589,13 +589,16 @@ class DryRunExchangeAdapter(ExchangeAdapter):
             position.quantity = remaining
 
     def _flatten(self, symbol: str) -> None:
-        """Remove the position and cancel its now-orphaned protective legs."""
+        """Remove the position and cancel every now-orphaned resting order for it.
+
+        This includes the ENTRY order, not only the protective STOP/TAKE_PROFIT legs: a
+        partially-filled entry (see DryRunConfig.partial_fill_ratio) can still be resting when
+        the position closes, and a flat position has no working order that makes sense to
+        leave open. Leaving it resting would let a later trade-through refill it into a
+        phantom, unapproved position (see AGENTS.md paper-loop notes).
+        """
         self._positions.pop(symbol, None)
-        for order_id in [
-            oid
-            for oid, o in self._orders.items()
-            if o.symbol == symbol and o.reduce_only and o.role in (_Role.STOP, _Role.TAKE_PROFIT)
-        ]:
+        for order_id in [oid for oid, o in self._orders.items() if o.symbol == symbol]:
             del self._orders[order_id]
 
     def _unrealized(self, position: _SimPosition) -> float:

@@ -174,6 +174,24 @@ def test_partial_fill_advances_to_open_on_a_second_trade_through() -> None:
     assert [o for o in a.get_open_orders(SYMBOL) if not o.reduce_only] == []
 
 
+def test_stop_out_after_partial_fill_cancels_the_stale_entry_remainder() -> None:
+    a = _adapter(partial_fill_ratio=0.5)
+    a.on_candle(_c(0, 100.0, 101.0, 99.5, 100.0))
+    a.place_limit_order(_long_entry(price=100.0, qty=1.0))
+    a.on_candle(_c(1, 101.0, 102.0, 99.0, 101.0))  # partial fill: 0.5 filled, 0.5 stays resting
+    pos = a.get_positions(SYMBOL)[0]
+    assert pos.quantity == pytest.approx(0.5)
+    # The stop hits: the position closes, and the stale entry remainder must not survive it.
+    events = a.on_candle(_c(2, 96.0, 96.0, 90.0, 92.0))
+    assert [e.kind for e in events] == [SimEventKind.STOP_HIT]
+    assert a.get_positions(SYMBOL) == []
+    assert a.get_open_orders(SYMBOL) == []
+    # A later candle trades back through the old entry price: it must NOT reopen a position.
+    events = a.on_candle(_c(3, 101.0, 102.0, 99.0, 101.0))
+    assert not [e for e in events if e.kind is SimEventKind.ENTRY_FILL]
+    assert a.get_positions(SYMBOL) == []
+
+
 def test_market_order_closes_immediately_with_taker_slippage() -> None:
     cost = CostConfig(slippage_rate=0.002)
     a = _adapter(cost=cost)
