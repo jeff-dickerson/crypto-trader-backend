@@ -304,6 +304,49 @@ def test_degraded_mode_persists_across_cycles_until_the_exchange_confirms_flat()
     assert approval.events_of(EventKind.KILL_SWITCH_FLATTENED)
 
 
+def test_repeat_trigger_while_halted_does_not_reopen_a_confirmed_flatten() -> None:
+    """A second, unrelated trigger arriving after the exchange already confirmed flat must not
+    re-mark flatten_confirmed False: there is nothing new to flatten, only a newer reason to
+    record (regression test for the reset-guard bug fixed alongside flatten ordering)."""
+    ks = KillSwitch()
+    ks.trigger(KillSwitchReason.MANUAL, "first halt", now=_BASE)
+    ks.mark_flatten_confirmed()
+    assert ks.flatten_confirmed
+
+    ks.trigger(KillSwitchReason.DAILY_LOSS, "second halt", now=_BASE + timedelta(hours=1))
+
+    assert not ks.is_armed
+    assert ks.flatten_confirmed  # must not be reopened by the repeat trigger
+    assert ks.last_event.reason is KillSwitchReason.DAILY_LOSS  # newest reason still recorded
+
+
+def test_cancel_and_close_all_closes_positions_before_cancelling_their_stops() -> None:
+    """Regression test for the flatten-ordering fix: an interrupted flatten must never leave a
+    position both open and unprotected, so positions are closed at market before their resting
+    stop orders are cancelled."""
+    fake = FakeAdapter(equity=5_000.0)
+    fake.positions = [_position()]
+    fake.orders = [_order("stop-1")]
+    approval = InMemoryApprovalChannel()
+    monitor, _ = _monitor(fake, approval)
+
+    call_log: list[str] = []
+    orig_place_market_order = fake.place_market_order
+    orig_cancel_order = fake.cancel_order
+    fake.place_market_order = lambda request: (
+        call_log.append("close_position"),
+        orig_place_market_order(request),
+    )[1]
+    fake.cancel_order = lambda symbol, order_id: (
+        call_log.append("cancel_order"),
+        orig_cancel_order(symbol, order_id),
+    )[1]
+
+    monitor._cancel_and_close_all()
+
+    assert call_log == ["close_position", "cancel_order"]
+
+
 def test_a_triggered_kill_switch_stops_evaluating_auto_triggers() -> None:
     """Once halted, check_cycle takes the retry-flatten branch, never re-checking equity."""
     fake = FakeAdapter(equity=10_000.0)

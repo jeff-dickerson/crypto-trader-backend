@@ -281,9 +281,10 @@ It consumes the unmodified `generate_signal` core and the characterization-spike
   BEFORE the position manager acts on that bar (so a fresh trigger halts new entries the same bar
   it fires) and evaluates, in order, consecutive API failures, daily loss (6%), max drawdown
   (15%); the first breach calls `_trigger`, which halts immediately then attempts to flatten.
-  `_attempt_flatten` cancels every resting order and closes every open position at market,
-  catching `ExchangeConnectionError` from each call; on a failure it alerts through
-  `ApprovalChannel` (`EventKind.KILL_SWITCH_DEGRADED`) and backs off (`sleep_fn`, injectable for
+  `_attempt_flatten` closes every open position at market first, then cancels remaining resting
+  orders, so a protective on-exchange stop is never cancelled until the position it protects is
+  already closed; it catches `ExchangeConnectionError` from each call, and on a failure it alerts
+  through `ApprovalChannel` (`EventKind.KILL_SWITCH_DEGRADED`) and backs off (`sleep_fn`, injectable for
   tests) before retrying, bounded at `flatten_max_attempts` (default 5) within one cycle.
   If none of those attempts confirms flat, `flatten_confirmed` stays False and the NEXT cycle's
   `check_cycle` takes an early-return branch that keeps retrying (not re-evaluating auto-triggers)
