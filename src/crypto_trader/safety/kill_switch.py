@@ -87,8 +87,9 @@ class KillSwitch:
         event = KillSwitchEvent(
             reason=reason, message=message, triggered_at=now, detail=detail or {}
         )
+        was_armed = self._armed
         self._armed = False
-        if self._flatten_confirmed:
+        if was_armed:
             self._flatten_confirmed = False
         self._last_event = event
         return event

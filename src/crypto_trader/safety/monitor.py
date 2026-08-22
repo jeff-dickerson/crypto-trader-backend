@@ -20,15 +20,16 @@ there is no genuine heartbeat timestamp to check, and this task does not fabrica
 it once it has a real heartbeat; see its docstring and AGENTS.md for the still-open judgment call
 (auto-flatten vs. alert-and-hold) that step 6 must resolve explicitly.
 
-Degraded-mode fallback (the PRD 9.1 open risk this class resolves): `_attempt_flatten` cancels
-resting orders and closes every open position at market, catching ExchangeConnectionError from
-each call. On a failure it alerts through the ApprovalChannel (KILL_SWITCH_DEGRADED, "repeatedly"
-because every failed attempt, in this cycle or a later one, sends another) and backs off before
-retrying; it never gives up permanently; a bounded number of attempts run within one cycle, and if
-none confirms flat, the next cycle's early-return branch above picks the retry back up. Throughout,
-the ALREADY-PLACED on-exchange resting stops (principle 4) remain the safety floor: this class
-never assumes a position is closed just because a cancel/market-close call was accepted, only once
-`_confirm_flat` reads back empty positions and orders from the exchange itself.
+Degraded-mode fallback (the PRD 9.1 open risk this class resolves): `_attempt_flatten` closes
+every open position at market first, then cancels remaining resting orders, catching
+ExchangeConnectionError from each call. On a failure it alerts through the ApprovalChannel
+(KILL_SWITCH_DEGRADED, "repeatedly" because every failed attempt, in this cycle or a later one,
+sends another) and backs off before retrying; it never gives up permanently; a bounded number of
+attempts run within one cycle, and if none confirms flat, the next cycle's early-return branch
+above picks the retry back up. Throughout, the ALREADY-PLACED on-exchange resting stops
+(principle 4) remain the safety floor: this class never assumes a position is closed just
+because a cancel/market-close call was accepted, only once `_confirm_flat` reads back empty
+positions and orders from the exchange itself.
 """
 
 from __future__ import annotations
@@ -209,11 +210,13 @@ class KillSwitchMonitor:
         )
 
     def _cancel_and_close_all(self) -> None:
-        for order in self.adapter.get_open_orders():
-            try:
-                self.adapter.cancel_order(order.symbol, order.order_id)
-            except KeyError:
-                pass  # already gone; not a connectivity failure
+        """Close positions at market before cancelling resting orders.
+
+        Closing first means a protective on-exchange stop is never cancelled until the
+        position it protects is already closed, so an interruption partway through this
+        method (an ExchangeConnectionError on a later call) never leaves a position both
+        unprotected and open.
+        """
         for position in self.adapter.get_positions():
             exit_side = OrderSide.SELL if position.side is OrderSide.BUY else OrderSide.BUY
             self.adapter.place_market_order(
@@ -224,6 +227,11 @@ class KillSwitchMonitor:
                     reduce_only=True,
                 )
             )
+        for order in self.adapter.get_open_orders():
+            try:
+                self.adapter.cancel_order(order.symbol, order.order_id)
+            except KeyError:
+                pass  # already gone; not a connectivity failure
 
     def _confirm_flat(self) -> bool:
         try:
