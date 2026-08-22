@@ -24,6 +24,12 @@ False on the venue (AGENTS.md); the manager honours capabilities rather than ass
 trailing stop. A frozen symbol (set by reconciliation on a drift) refuses NEW entries but still
 manages an existing position conservatively (its stop and take-profit keep resting, and it may
 tighten the stop or exit), because abandoning a live position would be less safe, not more.
+
+An optional `crypto_trader.safety.kill_switch.KillSwitch` (Build Order step 5) is the same kind of
+gate, but account-wide rather than per-symbol: while triggered, `_maybe_seek_entry` refuses every
+new entry. The kill switch's own flatten (crypto_trader.safety.monitor) acts directly against the
+adapter, not through this manager, so an exchange-side close it causes is picked up on the next
+bar's `_sync_from_exchange`, exactly like any other exchange-attributed close (see AGENTS.md).
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ from crypto_trader.ingest.models import Candle
 from crypto_trader.paper.plan import TradePlan
 from crypto_trader.paper.reconciliation import ExpectedPosition
 from crypto_trader.paper.risk import DEFAULT_RISK_CONFIG, RiskConfig, size_trade_plan
+from crypto_trader.safety.kill_switch import KillSwitch
 from crypto_trader.strategy.config import DEFAULT_STRATEGY_CONFIG, StrategyConfig
 from crypto_trader.strategy.position import PositionSide, PositionState, PositionStatus
 from crypto_trader.strategy.signal import SignalAction, generate_signal
@@ -139,6 +146,7 @@ class PositionManager:
         risk_config: RiskConfig = DEFAULT_RISK_CONFIG,
         slider: float = 1.0,
         entry_valid_bars: int = DEFAULT_ENTRY_VALID_BARS,
+        kill_switch: KillSwitch | None = None,
     ) -> None:
         self._adapter = adapter
         self._approval = approval
@@ -146,6 +154,11 @@ class PositionManager:
         self._risk_config = risk_config
         self._slider = slider
         self._entry_valid_bars = entry_valid_bars
+        # Build Order step 5 (AGENTS.md): None preserves every pre-step-5 call site's behaviour
+        # (no gate at all). When supplied, a triggered (not-armed) kill switch halts signal
+        # generation account-wide, the same "no new entries" obligation the per-symbol `frozen`
+        # flag already enforces for a reconciliation drift.
+        self._kill_switch = kill_switch
         self._symbols: dict[str, _ManagedSymbol] = {}
         # Audit trails for the Gate 2 critical-failure checks.
         self.closed_trades: list[ClosedPaperTrade] = []
@@ -357,6 +370,8 @@ class PositionManager:
     ) -> None:
         if ms.frozen:
             return  # refuse new entries while frozen; existing position (none here) still managed
+        if self._kill_switch is not None and not self._kill_switch.is_armed:
+            return  # kill switch triggered: halts signal generation account-wide (PRD 9.1)
         state = PositionState.flat(traded_zones=tuple(ms.traded_zones))
         signal = generate_signal(h4_window, d1_window, state, self._strategy_config)
         if signal.action not in (SignalAction.ENTER_LONG, SignalAction.ENTER_SHORT):

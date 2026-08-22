@@ -234,6 +234,107 @@ This task builds the machine only; it does NOT run the 4-week Gate 2 paper windo
   `PaperTrader` ties adapter + manager + reconciliation together bar by bar, reusing the backtest engine's `causal_windows` as the single no-lookahead authority (not re-implemented, so paper and backtest cannot diverge on which candles a decision sees), and replays symbols sequentially over one shared account exactly as the Gate 1 backtest does (true wall-clock interleaving of concurrent symbols is a step-6 concern).
   At the end of a run it audits the four PRD 6.2 critical-failure classes explicitly (approval bypass, a stop that failed to rest, a fill not traded through, undetected reconciliation drift) and reports `gate2_clean`.
 
+## Architecture decisions from Build Order step 5 (kill switch and daily digest)
+
+Step 5 is the backend half of "Interfaces": the kill switch and the daily digest, in
+`src/crypto_trader/safety/`.
+The read-only TUI and the web UI are covered by the separate `crypto-trader-web` app (its
+Terminal monitor screen substitutes for the TUI); this task does not touch that repo.
+It is independent of the REST API (not yet planned) and of any parallel strategy-retune task
+(different files: `safety/`, `paper/loop.py`, `paper/position_manager.py`,
+`approval/channel.py`'s `EventKind`, versus `strategy/config.py`).
+It consumes the unmodified `generate_signal` core and the characterization-spike
+`ExchangeAdapter`/`ApprovalChannel` seams unchanged; the only interface change is one additive
+`ExchangeAdapter` method, matching the `place_market_order` precedent from step 4.
+
+- **`ExchangeAdapter.consecutive_api_failures() -> int` was ADDED (flagged, not silent).**
+  PRD 9.1's "5 consecutive API failures" auto-trigger needs the adapter to track and report its
+  own connectivity health (governing principle 1: the adapter is the source of truth for exchange
+  state, including whether it can currently reach the exchange).
+  This is purely additive: a new abstract method plus a new `ExchangeConnectionError` exception
+  (`crypto_trader.exchange.adapter`), with `DryRunExchangeAdapter` implementing both via a shared
+  `_guard()` helper called at the top of every method that represents a real venue round trip.
+  DryRun has no real network, so failures are never spontaneous: `simulate_outage(n)` is the
+  explicit test/simulation hook (the same pattern as `partial_fill_ratio`, a documented
+  deterministic stand-in for something the venue would do on its own) that makes the next `n`
+  guarded calls raise `ExchangeConnectionError` and increments the tracked count; any guarded
+  call that succeeds resets it to 0.
+  `test_exchange_adapter.py`'s stub adapter was updated to implement the new method, exactly as
+  step 4 updated it for `place_market_order`.
+
+- **KillSwitch is a small state machine with two booleans, not one (`crypto_trader.safety.kill_switch`).**
+  `is_armed` goes False the INSTANT `trigger()` is called: this is the "halts signal generation"
+  and "requires re-arm" obligation (PRD 9.1), and PositionManager checks it in
+  `_maybe_seek_entry` before any new entry, the same gate shape as the existing per-symbol
+  `frozen` check from reconciliation.
+  `flatten_confirmed` is separate and starts False on trigger: it becomes True only once exchange
+  truth (not an accepted order, an actually-confirmed empty `get_positions()`/`get_open_orders()`)
+  proves flat.
+  This split directly resolves the PRD 9.1 open risk: the halt can never be blocked by a degraded
+  exchange, but "killed" is never reported on hope alone.
+  `rearm()` is the operator action that resumes trading; wiring an actual `/rearm` Telegram command
+  is out of this task's scope (PositionManager and KillSwitchMonitor are the component, not the
+  control surface).
+
+- **Degraded-mode fallback, resolving the first PRD 9.1 open risk (`crypto_trader.safety.monitor.KillSwitchMonitor`).**
+  `check_cycle(now=...)` runs once per decision cycle, called from `PaperTrader._run_symbol`
+  BEFORE the position manager acts on that bar (so a fresh trigger halts new entries the same bar
+  it fires) and evaluates, in order, consecutive API failures, daily loss (6%), max drawdown
+  (15%); the first breach calls `_trigger`, which halts immediately then attempts to flatten.
+  `_attempt_flatten` cancels every resting order and closes every open position at market,
+  catching `ExchangeConnectionError` from each call; on a failure it alerts through
+  `ApprovalChannel` (`EventKind.KILL_SWITCH_DEGRADED`) and backs off (`sleep_fn`, injectable for
+  tests) before retrying, bounded at `flatten_max_attempts` (default 5) within one cycle.
+  If none of those attempts confirms flat, `flatten_confirmed` stays False and the NEXT cycle's
+  `check_cycle` takes an early-return branch that keeps retrying (not re-evaluating auto-triggers)
+  until `_confirm_flat()` reads back empty positions and orders, at which point it alerts
+  `EventKind.KILL_SWITCH_FLATTENED` and marks confirmed.
+  Throughout, the already-placed on-exchange resting stop from each position's entry (principle 4)
+  is what actually protects the account; this class only removes it once it can prove the position
+  is already gone.
+
+- **The websocket-dead trigger is a documented, unwired, pure function (`websocket_dead_trigger` in monitor.py), per the task brief.**
+  The paper/DryRun adapter has no real websocket, so `KillSwitchMonitor.check_cycle` never calls
+  it: the task brief explicitly forbids fabricating a heartbeat timestamp for a trigger that
+  cannot genuinely fire yet.
+  The function itself (condition only: stale heartbeat AND open positions) is written and tested
+  so step 6's live adapter can call it once it has a real `last_message_at`.
+  **Still-open judgment call step 6 must resolve explicitly (not resolved here, per design
+  review and the task brief):** whether the correct ACTION on this condition is auto-flatten
+  (call the same trigger path as the other three auto-triggers) or alert-and-hold, since
+  auto-flattening purely because a websocket dropped can fight "on-exchange stops are the floor"
+  when REST and the resting stops are actually fine.
+  `websocket_dead_trigger`'s docstring carries this note inline so a step-6 reader hits it at the
+  point of use, not only here.
+
+- **EquityTracker is the one shared source for "today's start" and "peak" equity (`crypto_trader.safety.equity`).**
+  Both the daily-loss/max-drawdown triggers and the digest's P&L/drawdown lines need the same two
+  numbers; tracking them twice risks disagreement, the same anti-pattern the DryRun adapter's
+  shared `CostConfig` avoids for slippage.
+  `KillSwitchMonitor` owns one instance (`monitor.equity`) and `PaperTrader` passes that same
+  instance to the digest scheduler each bar, so the two surfaces never diverge.
+  Known, accepted limitation matching an existing one: the paper loop replays symbols
+  SEQUENTIALLY, one symbol's whole history before the next (see the step-4 entry below,
+  "The loop and its Gate 2 audit"), so a multi-symbol paper run's day boundaries do not reflect
+  true wall-clock order; this is correct for live operation (step 6, one real timeline) and for
+  single-symbol replay, which is what it is tested against.
+
+- **Daily digest: six lines, one clear number each, and an honest degrade (`crypto_trader.safety.digest`).**
+  `build_daily_digest` reads equity, today's P&L, drawdown, open position count, kill-switch
+  state, and rate-limit/API health from the adapter and the shared `EquityTracker`; `format_digest`
+  renders exactly six lines, matching the `TradePlan.risk_line` philosophy (conduct rules 5, 8: UI
+  encapsulates complexity, one settled number per concept, no internal state dump).
+  It degrades rather than skipping the send when the exchange is unreachable
+  (`exchange_reachable=False`, an explicit "UNREACHABLE" line): PRD 9.5 frames the digest itself as
+  the heartbeat ("silence means the bot died"), so the digest going out AT ALL, even reporting bad
+  news, is itself useful information.
+  `DailyDigestScheduler` fires once per UTC calendar date; `PaperTrader` calls it once per bar
+  AFTER the manager acts, so the digest reflects that bar's post-action state.
+  **Detecting a MISSED digest is explicitly NOT built here** (the task brief only requires noting
+  it): a dead process cannot alert about its own silence, so that needs an external watcher
+  independent of this process; this is future ops work, documented in `digest.py`'s module
+  docstring.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

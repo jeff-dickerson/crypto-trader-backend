@@ -133,6 +133,9 @@ def test_complete_stub_adapter_satisfies_the_contract() -> None:
             return RateLimitStatus(scope="ip", limit_per_window=10,
                                    used_in_window=0, window_seconds=1.0)
 
+        def consecutive_api_failures(self) -> int:
+            return 0
+
     adapter = StubAdapter()
     assert isinstance(adapter, ExchangeAdapter)
     assert adapter.capabilities.position_mode is PositionMode.ONE_WAY

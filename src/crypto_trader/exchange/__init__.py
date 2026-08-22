@@ -9,7 +9,7 @@ informed by a read-only characterization of Bitunix's public API (see AGENTS.md)
 
 from __future__ import annotations
 
-from crypto_trader.exchange.adapter import ExchangeAdapter
+from crypto_trader.exchange.adapter import ExchangeAdapter, ExchangeConnectionError
 from crypto_trader.exchange.types import (
     Balance,
     ExchangeCapabilities,
@@ -32,6 +32,7 @@ from crypto_trader.exchange.types import (
 
 __all__ = [
     "ExchangeAdapter",
+    "ExchangeConnectionError",
     "Balance",
     "ExchangeCapabilities",
     "Fill",

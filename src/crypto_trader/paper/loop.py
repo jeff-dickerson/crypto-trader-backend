@@ -17,6 +17,12 @@ No-lookahead is not re-implemented here: the causal per-bar slice is the backtes
 `causal_windows`, the single authority for that guarantee (AGENTS.md), reused unchanged so the
 paper loop and the backtest cannot diverge on which candles a decision may see.
 
+Build Order step 5 (AGENTS.md) wires two more optional, account-wide checks into this same bar
+loop, both no-ops when omitted (every pre-step-5 call site keeps working unchanged): a
+`KillSwitchMonitor` checked BEFORE the manager acts each bar, so a trigger halts new entries on the
+same bar it fires (PRD 9.1), and a `DailyDigestScheduler` checked AFTER, so the once-a-day
+digest/heartbeat reflects that bar's post-action state.
+
 Symbols are replayed sequentially over one shared account, exactly as the Gate 1 backtest
 replays them (crypto_trader.backtest.engine.run_backtest); true wall-clock interleaving of
 concurrent symbols is a live-adapter concern (step 6), not something 4H/daily replay can add
@@ -46,6 +52,8 @@ from crypto_trader.paper.reconciliation import (
     ReconciliationConfig,
     reconcile,
 )
+from crypto_trader.safety.digest import DailyDigestScheduler
+from crypto_trader.safety.monitor import KillSwitchMonitor
 from crypto_trader.strategy.config import StrategyConfig
 from crypto_trader.strategy.position import PositionStatus
 
@@ -96,11 +104,15 @@ class PaperTrader:
         *,
         strategy_config: StrategyConfig,
         reconciliation_config: ReconciliationConfig = DEFAULT_RECONCILIATION_CONFIG,
+        kill_switch_monitor: KillSwitchMonitor | None = None,
+        digest_scheduler: DailyDigestScheduler | None = None,
     ) -> None:
         self._adapter = adapter
         self._manager = manager
         self._strategy_config = strategy_config
         self._recon_config = reconciliation_config
+        self._kill_switch_monitor = kill_switch_monitor
+        self._digest_scheduler = digest_scheduler
         # Running audit state, keyed for the end-of-run critical-failure report.
         self._approved_plan_ids: set[str] = set()
         self._stop_rest_violations: list[str] = []
@@ -133,6 +145,9 @@ class PaperTrader:
             sim_events = self._adapter.on_candle(bar)
             self._audit_fills(sim_events, bar)
 
+            if self._kill_switch_monitor is not None:
+                self._kill_switch_monitor.check_cycle(now=bar.close_time)
+
             h4_window, d1_window = causal_windows(h4, d1, d1_close_times, i, cfg)
             self._manager.on_bar(symbol, i, bar, h4_window, d1_window, sim_events)
 
@@ -141,6 +156,15 @@ class PaperTrader:
             if self._reconcile_symbol(symbol):
                 sr.n_drift_freezes += 1
             sr.n_bars += 1
+
+            if self._digest_scheduler is not None and self._kill_switch_monitor is not None:
+                self._digest_scheduler.maybe_send(
+                    self._adapter,
+                    self._kill_switch_monitor.kill_switch,
+                    self._kill_switch_monitor.equity,
+                    self._manager.approval,
+                    now=bar.close_time,
+                )
 
         # Roll up the manager's per-run audit trails into this symbol's counts.
         for plan_id, verdict in self._manager.approvals[approvals_before:]:

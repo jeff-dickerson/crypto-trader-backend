@@ -76,8 +76,11 @@ class EventKind(str, Enum):
     PLAN_VOIDED and PLAN_REJECTED explain why a signal did not become a live order.
     ORDER_SUBMITTED / ENTRY_FILLED / POSITION_EXITED track a trade through its life.
     RECONCILIATION_DRIFT / SYMBOL_FROZEN / SYMBOL_RESUMED cover the reconciler's alerts.
-    KILL_SWITCH_FIRED / KILL_SWITCH_REARMED are RESERVED for Build Order step 5; they are
-    declared now so the kill switch can use this same channel with no breaking change.
+    KILL_SWITCH_FIRED / KILL_SWITCH_REARMED were RESERVED for Build Order step 5, and step 5 now
+    uses them (crypto_trader.safety), plus two more additive members for its degraded-mode
+    fallback: KILL_SWITCH_DEGRADED (a flatten attempt could not reach the exchange, retrying) and
+    KILL_SWITCH_FLATTENED (the exchange has confirmed flat). DAILY_DIGEST is step 5's once-a-day
+    heartbeat (PRD 9.5).
     """
 
     PLAN_VOIDED = "plan_voided"
@@ -88,8 +91,11 @@ class EventKind(str, Enum):
     RECONCILIATION_DRIFT = "reconciliation_drift"
     SYMBOL_FROZEN = "symbol_frozen"
     SYMBOL_RESUMED = "symbol_resumed"
-    KILL_SWITCH_FIRED = "kill_switch_fired"  # reserved for step 5
-    KILL_SWITCH_REARMED = "kill_switch_rearmed"  # reserved for step 5
+    KILL_SWITCH_FIRED = "kill_switch_fired"
+    KILL_SWITCH_REARMED = "kill_switch_rearmed"
+    KILL_SWITCH_DEGRADED = "kill_switch_degraded"
+    KILL_SWITCH_FLATTENED = "kill_switch_flattened"
+    DAILY_DIGEST = "daily_digest"
 
 
 @dataclass(frozen=True)

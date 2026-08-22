@@ -14,6 +14,7 @@ import pytest
 
 from crypto_trader.backtest.costs import CostConfig
 from crypto_trader.config import Timeframe
+from crypto_trader.exchange.adapter import ExchangeConnectionError
 from crypto_trader.exchange.dryrun import (
     DryRunConfig,
     DryRunExchangeAdapter,
@@ -232,3 +233,25 @@ def test_unknown_symbol_rule_raises_rather_than_guessing() -> None:
     a = _adapter()
     with pytest.raises(KeyError):
         a.get_symbol_rule("DOGEUSDT")
+
+
+# --------------------------------------------------------------------------- kill-switch support
+
+
+def test_simulate_outage_raises_on_the_next_n_calls_then_recovers() -> None:
+    a = _adapter()
+    a.simulate_outage(2)
+    with pytest.raises(ExchangeConnectionError):
+        a.get_balance()
+    assert a.consecutive_api_failures() == 1
+    with pytest.raises(ExchangeConnectionError):
+        a.get_positions()
+    assert a.consecutive_api_failures() == 2
+    # The outage budget is exhausted: the next call succeeds and resets the failure count.
+    a.get_balance()
+    assert a.consecutive_api_failures() == 0
+
+
+def test_consecutive_api_failures_starts_at_zero() -> None:
+    a = _adapter()
+    assert a.consecutive_api_failures() == 0

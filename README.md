@@ -21,7 +21,9 @@ A real Gate 1 run has since happened against ingested Bitunix candles across 14 
 A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) produced the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract for paper and live adapters, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
 Step 4 adds the first working implementation of that interface: the DryRun paper adapter, alongside the live Bitunix adapter still to come in step 6.
 Step 4 also added one method to that interface, `place_market_order` (MARKET is a confirmed-native Bitunix order type), needed for the momentum-shift exit and reused by step 5's kill switch.
-Later steps (the read-only TUI and daily digest, the kill switch, and the live Bitunix adapter) are separate, future tasks; no live exchange credential handling exists yet.
+Step 5 adds the backend half of "Interfaces": the kill switch and the daily digest, in `src/crypto_trader/safety/` (see [PRD.md](PRD.md) section 9.1/9.5 and [AGENTS.md](AGENTS.md)).
+The read-only TUI and the web UI are covered by the separate `crypto-trader-web` app, out of this repo's scope.
+The live Bitunix adapter (step 6) is still a future task; no live exchange credential handling exists yet.
 See [PRD.md](PRD.md) section 12 for the full build order with accurate current status on every step.
 
 ## Requirements
@@ -66,6 +68,11 @@ src/crypto_trader/
     reconciliation.py      drift check with a documented tolerance, freeze-on-drift
     loop.py                the PaperTrader orchestrator and the Gate 2 critical-failure audit
     __main__.py            paper-loop entry point (python -m crypto_trader.paper --synthetic)
+  safety/
+    equity.py              EquityTracker: the one shared daily-anchor/peak-equity source
+    kill_switch.py          KillSwitch: the armed/triggered state machine
+    monitor.py               KillSwitchMonitor: auto-triggers and the degraded-mode flatten retry
+    digest.py                 the once-a-day digest/heartbeat through ApprovalChannel
   secrets.py             env-loaded secrets (Telegram token), redacted, never in the config plane
   backtest/
     engine.py             no-lookahead replay engine (causal_windows) and fill/management sim
@@ -102,6 +109,8 @@ tests/
   test_paper_reconciliation.py     the reconciliation tolerance and each drift condition
   test_approval_channels.py        the in-memory channel, the mocked Telegram surface, and secrets hygiene
   test_paper_loop.py               end-to-end approve-then-execute runs and the Gate 2 audit
+  test_kill_switch.py              each auto-trigger, the degraded-mode fallback, and rearm
+  test_daily_digest.py             digest content, cadence, and honest degrading when unreachable
 ```
 
 ## Running the tests
@@ -153,6 +162,7 @@ python -m crypto_trader.paper --synthetic --years 1.5
 
 If a Telegram bot token and an allowlisted chat id are set in the environment (`CRYPTO_TRADER_TELEGRAM_BOT_TOKEN` and `CRYPTO_TRADER_TELEGRAM_ALLOWED_CHAT_ID`), the loop uses the real Telegram approval channel; otherwise it prints a clear message and falls back to the in-memory auto-approve channel, so it never crashes for lack of a credential.
 Like the Gate 1 lab, a synthetic run validates only that the machine works, never the edge: it builds and self-tests the machine, and the 4-week paper-trading window is a future operational task (see [PRD.md](PRD.md) section 6.2).
+The kill switch and the daily digest (`src/crypto_trader/safety/`) are wired into this run: the summary prints the kill switch's final state, and a digest fires once per UTC day through the same approval channel.
 
 ## Running with Docker
 
