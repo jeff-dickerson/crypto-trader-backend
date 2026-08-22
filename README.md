@@ -140,6 +140,7 @@ Useful flags: `--years` and `--seed` size the synthetic data, `--lookbacks 45,60
 Reports land in `backtest_reports/`, which is gitignored as run artifacts; one example synthetic report is committed at `backtest_reports/EXAMPLE_synthetic_gate1.md` for reference.
 The synthetic run reports Gate 1 as not proven by design: synthetic data validates only that the harness works, never the trading edge.
 A real database-mode run has since happened, ingesting 14 symbols from Bitunix's public kline endpoint, and its report is committed at `backtest_reports/gate1_real_2026-08-21.md` (and `.json`) for reference: Gate 1 did not pass on that real data, see [PRD.md](PRD.md) section 6.2 for the honest numbers.
+A follow-up investigation of the exit-side parameters against that same real data is committed at `backtest_reports/retune_2026-08-22.md`: it found the momentum-shift exit protective rather than premature and no exit-parameter change that moves the out-of-sample result, so the exit parameters were kept unchanged.
 The database file itself is never committed; candle data is re-fetchable and gitignored per the data plan.
 
 ## Running the paper loop (Gate 2)
