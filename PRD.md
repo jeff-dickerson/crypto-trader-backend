@@ -156,11 +156,13 @@ The captain's decision: keep the requirements as two different kinds of gate, no
 1. **Backtest (Gate 1, "proves the edge").** 2 to 3 years of data, real costs (fees, funding, slippage, minimum notional).
    Tune on the first two-thirds, score frozen on the final third.
    Target roughly 150-300 signals, out-of-sample expectancy with a confidence interval excluding zero, no rule-breaking drawdown (the same 15% max-DD bar as the live gate).
-   **Harness built and run end to end; edge NOT proven.**
+   **Harness built and run end to end on real data; Gate 1 NOT PASSED.**
    The Build Order step-3 lab (`src/crypto_trader/backtest/`) implements all of the above: no-lookahead per-bar slicing, the cost model including funding across the hold, the captain-decision-4 funding filter, the lookback-and-filter sweep with the frozen out-of-sample third, and the three pinned denominators (signals, fills, closed trades).
-   It has only been run on deterministic synthetic data (real candle ingest needs the network, which the test and build environment does not use), so no reported number validates the real edge; the report verdict for a synthetic run is hard-coded to "NOT PROVEN" and one example report is committed at `backtest_reports/EXAMPLE_synthetic_gate1.md`.
-   On that synthetic data the funding filter did not improve, and in places worsened, the out-of-sample result, which is a genuine sweep finding (the filter is not assumed to help; the sweep exists to test it) but is not evidence about real markets.
-   A real Gate 1 run against ingested Bitunix candles is still owed before this gate can be called passed.
+   It was first run only on deterministic synthetic data (the report verdict for a synthetic run is hard-coded to "NOT PROVEN"; one example report stays committed at `backtest_reports/EXAMPLE_synthetic_gate1.md`).
+   A real run has now happened: 14 symbols (BTCUSDT and ETHUSDT plus 12 best-effort top-volume Bitunix perpetuals) ingested from Bitunix's public kline endpoint, BTCUSDT/ETHUSDT/most majors reaching the full 3-year window and younger listings reaching as far back as their listing date, all details in `backtest_reports/gate1_real_2026-08-21.md` (and `.json`).
+   The chosen combination (45-day lookback, funding filter off, selected in-sample) produced only 33 out-of-sample closed trades, well short of the 150-300 target, with an out-of-sample mean expectancy of -0.163R and a 95% CI of [-0.448, 0.156] that does not exclude zero: **Gate 1 fails on both the signal-count bar and the confidence-interval bar**, and the point estimate is negative, opposite the sign the synthetic harness run and the design-review reproduction assumed.
+   This is a genuine, captain-relevant finding, not a harness defect: the current 14-symbol universe over the reachable Bitunix history does not generate enough signals to reach statistical power in a reasonable backtest window, and the real out-of-sample edge as currently parameterized shows no evidence of being positive.
+   Candidate next steps (not applied by this task, per captain decision 5: a parameter change needs a captain decision, not a unilateral edit): expand the symbol universe further, revisit the pinned 60-day lookback (the sweep already covers 45/60/75 and none look better in this real run), or accept that the current strategy parameterization does not clear Gate 1 as specified.
 2. **Paper (Gate 2, "proves the machine").** A paper adapter implementing the identical exchange interface; honest fills (limits fill only when the market trades through, stops always slip).
    4 weeks minimum, zero critical failures (enumerated concretely: undetected reconciliation drift, a stop that failed to rest server-side, an approval bypass, a fill modeled as filled when the market did not trade through it), full reconciliation.
    **Not started.**
@@ -288,10 +290,10 @@ Python, Docker (bot process container; a second web UI container is future work 
 
 1. **Scaffold and data layer.** Project structure, Docker, the SQLite schema, candle ingest with full ugly-data validation. **Done, merged.**
 2. **Pure framework.** Volume profile, bias, `generate_signal()` core, unit tests with synthetic candles engineered to trigger each path. **Done, merged.**
-3. **Backtest lab (Gate 1).** Replay engine with no-lookahead slicing, cost model, parameter sweep, markdown/JSON reports. **Done (harness), Gate 1 not yet proven.**
+3. **Backtest lab (Gate 1).** Replay engine with no-lookahead slicing, cost model, parameter sweep, markdown/JSON reports. **Done (harness and a real run); Gate 1 NOT PASSED.**
    Built in `src/crypto_trader/backtest/`: a no-lookahead replay engine, a fees/funding/slippage/minimum-notional cost model, the captain-decision-4 funding filter, a lookback-and-filter sweep with a frozen out-of-sample score, and markdown/JSON reports; see [AGENTS.md](AGENTS.md) for the step-3 architecture decisions.
-   The lab has only been run on synthetic data so far (real candle ingest needs the network), so the edge is not validated, only the harness: Gate 1 remains not proven (see section 6.2).
-   Design review's recommended read-only Bitunix spike (section 9.3) belongs between this step and step 4.
+   First run only on synthetic data (the harness-only signal); a real run has since happened against 14 symbols of ingested Bitunix candles and Gate 1 failed on both bars (33 out-of-sample closed trades against the 150-300 target, a negative out-of-sample mean expectancy with a confidence interval that does not exclude zero), see section 6.2 and `backtest_reports/gate1_real_2026-08-21.md` for the full honest result.
+   Design review's recommended read-only Bitunix spike (section 9.3) has also run since; see [AGENTS.md](AGENTS.md).
 4. **Paper loop (Gate 2).** DryRun adapter, position manager, approval flow, reconciliation, the Telegram bot with approval buttons. **Not started.**
 5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here). **Not started.**
 6. **Bitunix live adapter (Gate 3).** Smallest viable size, scale after it is earned. **Not started.**

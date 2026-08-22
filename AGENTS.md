@@ -176,9 +176,18 @@ Run it with `python -m crypto_trader.backtest` (see README.md).
   The sweep varies the lookback across 45/60/75 days (a small range around the pinned 60, inside the spec's 30-90 bound) and the funding filter off/on.
   Tuning uses the first two-thirds of the timeline and the score is frozen on the final third; the chosen combination is selected by IN-SAMPLE mean R only, and every reported number is labelled in-sample or out-of-sample.
   Reports (`crypto_trader.backtest.report`) go to a gitignored `backtest_reports/`; one example synthetic report is committed for reference.
-- **Gate 1 is NOT proven yet (project-level finding).**
-  The lab has only been run on deterministic synthetic data (`crypto_trader.backtest.synthetic`), because real candle ingest needs the network; synthetic data validates the harness, never the edge.
-  A real Gate 1 run against ingested candles is still owed, and no report may claim a pass on synthetic data (the verdict logic hard-codes "NOT PROVEN" for synthetic runs).
+- **Gate 1 has now run on real data and did NOT pass (project-level finding, PRD 6.2).**
+  The synthetic run (`crypto_trader.backtest.synthetic`) only ever validates the harness, never the edge; no report may claim a pass on synthetic data (the verdict logic hard-codes "NOT PROVEN" there).
+  A real run happened against 14 symbols ingested from Bitunix (`backtest_reports/gate1_real_2026-08-21.md` and `.json`): the chosen combination produced 33 out-of-sample closed trades against the 150-300 target, with a negative out-of-sample mean expectancy (-0.163R) and a 95% CI that does not exclude zero.
+  Two real findings the synthetic run could not surface: the current 14-symbol universe over the Bitunix-reachable history is too thin to reach the target signal count in this backtest window at all, and the real point-estimate sign is negative, opposite what the design-review's synthetic reproduction assumed.
+  Neither the universe size nor the pinned parameters were changed to chase a pass (captain decision 5: a parameter change is a captain decision, not a unilateral edit); see PRD 6.2 for the full numbers and candidate next steps.
+
+- **Real-data ingest learnings the synthetic generator could not surface.**
+  Bitunix's real kline endpoint returns candle `time` (and every OHLCV field) as a JSON string, not a JSON number; `crypto_trader.ingest.validate._validate_shape` used a strict `isinstance(int)` check on `open_time_ms` that rejected every real candle as malformed until fixed (now coerces a numeric string via `_coerce_open_time_ms`, mirroring the existing OHLCV string coercion).
+  Real kline rows arrive newest-first (descending `time`), which the validator's out-of-order check flags on almost every row: this is expected per the source's documented behavior (see the characterization-spike entry above), not a bug, but it makes the per-symbol issue counts look alarming at a glance; a future reader should expect a large `out_of_order` count on every real ingest and not treat it as a red flag on its own.
+  The public kline endpoint's `limit` cap (200 rows) is paginated backward with the `endTime` query param (confirmed working live); `BitunixCandleSource.fetch_candles` and `ingest_symbol` now take an optional `end_time_ms` for this, and a pagination loop must track the raw fetched page size to detect "reached the start of listing", not the post-validation accepted count, since a malformed or duplicate row can shrink accepted below a full page.
+  Rate limits held with simple pacing: about 5 req/sec (well under the published 10 req/sec/IP), no 429s encountered ingesting 14 symbols x 2 timeframes x up to 33 pages each.
+  BTCUSDT, ETHUSDT, and most established majors (SOL, XRP, DOGE, BNB, LINK, SUI, ADA, BCH) reached the full 3-year target window; younger listings (HYPE, BZ, ENA, 1000PEPE) stopped at their listing date, all noted per-symbol in the real report rather than silently padded.
 
 ## Maintaining this file
 

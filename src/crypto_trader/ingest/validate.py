@@ -69,6 +69,27 @@ def _coerce_number(value: object) -> float | None:
     return None
 
 
+def _coerce_open_time_ms(value: object) -> int | None:
+    """Best-effort integer coercion for open_time_ms.
+
+    Accepts a plain int directly, and also a numeric string: Bitunix's real kline
+    endpoint returns `time` as a string (confirmed against the live API, not
+    reproducible from the synthetic fixture data), so a strict isinstance(int)
+    check rejected every real candle as malformed. Rejects None, bools, floats
+    with a fractional part, and anything else that is not cleanly an integer.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _validate_shape(raw: RawCandle) -> tuple[dict[str, float | int], str | None]:
     """Checks one RawCandle's fields are present and numerically sane.
 
@@ -79,9 +100,10 @@ def _validate_shape(raw: RawCandle) -> tuple[dict[str, float | int], str | None]
     if not isinstance(raw.symbol, str) or not raw.symbol:
         return {}, "missing or invalid symbol"
 
-    if not isinstance(raw.open_time_ms, int) or isinstance(raw.open_time_ms, bool):
+    open_time_ms = _coerce_open_time_ms(raw.open_time_ms)
+    if open_time_ms is None:
         return {}, f"open_time_ms is not an int: {raw.open_time_ms!r}"
-    if raw.open_time_ms <= 0:
+    if open_time_ms <= 0:
         return {}, f"open_time_ms is not positive: {raw.open_time_ms!r}"
 
     numbers: dict[str, float | int] = {}
@@ -111,7 +133,7 @@ def _validate_shape(raw: RawCandle) -> tuple[dict[str, float | int], str | None]
         return {}, f"close {numbers['close']} is outside [low, high]"
     if numbers["volume"] < 0:
         return {}, f"volume is negative: {numbers['volume']}"
-    numbers["open_time_ms"] = raw.open_time_ms
+    numbers["open_time_ms"] = open_time_ms
 
     return numbers, None
 
@@ -152,10 +174,7 @@ def validate_candles(
                     type=IssueType.MALFORMED,
                     symbol=symbol,
                     detail=error,
-                    open_time_ms=raw.open_time_ms
-                    if isinstance(raw.open_time_ms, int)
-                    and not isinstance(raw.open_time_ms, bool)
-                    else None,
+                    open_time_ms=_coerce_open_time_ms(raw.open_time_ms),
                 )
             )
             continue

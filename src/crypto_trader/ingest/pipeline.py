@@ -28,6 +28,7 @@ def ingest_symbol(
     timeframe: Timeframe,
     *,
     limit: int = 200,
+    end_time_ms: int | None = None,
     now: datetime | None = None,
 ) -> ValidationResult:
     """Fetches, validates, and stores candles for one symbol/timeframe.
@@ -35,10 +36,15 @@ def ingest_symbol(
     Storage is idempotent: re-ingesting a candle already on disk with an
     identical (symbol, open_time) is a no-op via INSERT OR IGNORE, so re-running
     ingest is always safe.
+    `end_time_ms`, when given, pages backward from that point (see
+    CandleSource.fetch_candles) instead of fetching the most recent candles; a
+    caller pulling deep history calls this repeatedly, walking end_time_ms back.
     Returns the ValidationResult (accepted candles plus every ugly-data issue
     found) so a caller can log or journal it.
     """
-    raw_candles = source.fetch_candles(symbol, timeframe, limit=limit)
+    raw_candles = source.fetch_candles(
+        symbol, timeframe, limit=limit, end_time_ms=end_time_ms
+    )
     result = validate_candles(raw_candles, symbol, timeframe, now=now or utc_now())
     store_candles(conn, result.accepted, timeframe)
     return result

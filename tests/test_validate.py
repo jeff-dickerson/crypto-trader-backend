@@ -107,6 +107,28 @@ def test_misaligned_timestamp_is_rejected_and_flagged():
     assert len(misaligned_issues) == 1
 
 
+def test_string_open_time_ms_is_accepted_like_bitunix_real_data():
+    # Bitunix's real kline endpoint returns "time" as a numeric string, not an
+    # int (confirmed against the live API; the synthetic fixtures never produce
+    # this shape). A candle in that exact shape must still be accepted.
+    candle = clean_4h_sequence(count=1)[0]
+    string_time_candle = RawCandle(
+        symbol=candle.symbol,
+        open_time_ms=str(candle.open_time_ms),
+        open=candle.open,
+        high=candle.high,
+        low=candle.low,
+        close=candle.close,
+        volume=candle.volume,
+        quote_volume=candle.quote_volume,
+    )
+    result = validate_candles([string_time_candle], SYMBOL, Timeframe.H4, now=FIXED_NOW)
+
+    assert len(result.accepted) == 1
+    assert result.accepted[0].open_time_ms == candle.open_time_ms
+    assert result.issues == []
+
+
 def test_daily_timeframe_uses_daily_boundary_and_duration():
     open_time = datetime(2026, 1, 5, 0, 0, 0, tzinfo=timezone.utc)
     open_time_ms = int(open_time.timestamp() * 1000)

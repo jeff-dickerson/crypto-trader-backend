@@ -17,3 +17,5 @@ data/
 backtest_reports/*
 !backtest_reports/EXAMPLE_synthetic_gate1.md
 !backtest_reports/EXAMPLE_synthetic_gate1.json
+!backtest_reports/gate1_real_2026-08-21.md
+!backtest_reports/gate1_real_2026-08-21.json

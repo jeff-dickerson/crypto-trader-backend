@@ -15,7 +15,7 @@ Read both before starting any new task on this project.
 Build Order steps 1 through 3 are complete: project scaffolding, Docker, the SQLite schema, and candle ingest with ugly-data validation (step 1); the pure strategy framework (step 2); and the backtest lab (step 3).
 Step 2 adds the deterministic decision core in `src/crypto_trader/strategy/`: a volume profile, a daily bias gate, the separation-then-return zone/setup logic, and the pure `generate_signal()` function, with unit tests that engineer synthetic candles to trigger each path.
 Step 3 adds the Gate 1 backtest lab in `src/crypto_trader/backtest/`: a no-lookahead replay engine, a fees/funding/slippage/minimum-notional cost model, the captain-decision-4 funding filter, a parameter sweep with a frozen out-of-sample score, and markdown/JSON reports.
-Gate 1 itself is not yet proven: the lab has only been run on synthetic data (real candle ingest needs the network), so the edge is not validated, only the harness (see [PRD.md](PRD.md) section 6.2).
+A real Gate 1 run has since happened against ingested Bitunix candles across 14 symbols, and Gate 1 did NOT pass: too few out-of-sample signals against the 150-300 target and a negative out-of-sample mean expectancy with a confidence interval that does not exclude zero (see [PRD.md](PRD.md) section 6.2 and `backtest_reports/gate1_real_2026-08-21.md` for the full honest result).
 A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) has also run, producing the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract the future paper and live adapters will implement, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
 Later steps (paper loop, interfaces, live adapter) are separate, future tasks.
 The `ExchangeAdapter` interface is defined, but no working exchange adapter or credential handling exists yet.
@@ -117,6 +117,8 @@ python -m crypto_trader.backtest --db data/crypto_trader.sqlite3 --symbols BTCUS
 Useful flags: `--years` and `--seed` size the synthetic data, `--lookbacks 45,60,75` sets the swept lookback-day values (within the 30 to 90 day bound), `--bootstrap` sets the confidence-interval resample count, and `--name` sets the report file base name.
 Reports land in `backtest_reports/`, which is gitignored as run artifacts; one example synthetic report is committed at `backtest_reports/EXAMPLE_synthetic_gate1.md` for reference.
 The synthetic run reports Gate 1 as not proven by design: synthetic data validates only that the harness works, never the trading edge.
+A real database-mode run has since happened, ingesting 14 symbols from Bitunix's public kline endpoint, and its report is committed at `backtest_reports/gate1_real_2026-08-21.md` (and `.json`) for reference: Gate 1 did not pass on that real data, see [PRD.md](PRD.md) section 6.2 for the honest numbers.
+The database file itself is never committed; candle data is re-fetchable and gitignored per the data plan.
 
 ## Running with Docker
 
