@@ -75,5 +75,37 @@ class BitunixSourceConfig:
 
     base_url: str = "https://fapi.bitunix.com"
     kline_path: str = "/api/v1/futures/market/kline"
+    trading_pairs_path: str = "/api/v1/futures/market/trading_pairs"
+    tickers_path: str = "/api/v1/futures/market/tickers"
+    depth_path: str = "/api/v1/futures/market/depth"
     request_timeout_seconds: float = 10.0
     symbols: tuple[str, ...] = field(default_factory=lambda: DEFAULT_SYMBOLS)
+
+
+@dataclass(frozen=True)
+class BinanceSourceConfig:
+    """Configuration for the public Binance spot kline source (data-vision mirror).
+
+    RESEARCH / BACKTEST ONLY (PRD section 10): Binance is a supplemental deep-history
+    source used to widen the Gate 1 backtest sample. It must NEVER feed a live or paper
+    trading decision; the live venue is Bitunix, the single source of truth (governing
+    principle 1). The `BinanceSpotCandleSource` that reads this is deliberately kept out
+    of every live/paper import path (see crypto_trader.ingest.binance_source and its
+    test guard). No credentials: unauthenticated public market data only.
+
+    Why spot via data-api.binance.vision, not USD-M futures: Binance's futures API
+    (fapi.binance.com) returns HTTP 451 (geo-restricted) from this build environment,
+    while the public data-vision mirror serves unauthenticated spot klines with no
+    geo-block. Spot OHLCV of the same majors is a sound deep-history proxy for
+    swing-pattern research (a perp tracks its spot index closely); the report's
+    Bitunix-vs-Binance parity spot-check quantifies the residual difference. Spot also
+    reaches further back than futures (BTC to 2017), which is exactly the deep history
+    this supplement exists to provide.
+    """
+
+    base_url: str = "https://data-api.binance.vision"
+    kline_path: str = "/api/v3/klines"
+    request_timeout_seconds: float = 10.0
+    # Binance's public spot kline endpoint returns up to 1000 rows per request, well
+    # above Bitunix's 200-row cap, so deep history paginates in far fewer requests.
+    max_rows_per_request: int = 1000

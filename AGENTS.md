@@ -441,6 +441,75 @@ its writes go through a new `PersistenceSink` seam so the paper layer never impo
   Commit-message em-dash and co-author-trailer checks remain by-eye (see the conduct-rules note
   above); `scripts/check_no_em_dash.py` covers code and docs.
 
+## Architecture decisions from the universe expansion (Gate 1 re-run on a larger sample)
+
+This was a data-expansion study answering PRD 6.2's "expand the universe further" candidate next
+step, NOT a strategy change: `StrategyConfig` and all entry/exit logic were left untouched, and
+the Gate 1 lab, cost model, and methodology (2:1 in-sample/out-of-sample split, freeze-on-final-
+third, select-on-in-sample-only) are the unmodified versions from `gate1_real_2026-08-21.md`.
+Full numbers: `backtest_reports/universe_expansion_2026-08-23.md` (and `.json`).
+
+- **Rule-defined universe selector, built at last (`crypto_trader.ingest.universe`).**
+  The spec's "top 10-15 perps by 24h volume above a liquidity floor, rule-defined and self-
+  updating" was never actually code until now (the prior Gate 1 run used a hand-picked 14-symbol
+  list). `select_universe(MarketData, UniverseConfig)` applies, in order: tradability
+  (symbolStatus OPEN, isApiSupported true, USDT-quoted, from the public trading-pairs endpoint);
+  a 24h quote-volume floor (public tickers `quoteVol`); and an order-book depth floor (summed
+  bid+ask notional within +-0.5% of mid from the public depth endpoint, which accepts only the
+  discrete level counts {1,5,15,50}, so 50 is used). The HTTP surface is behind the `MarketData`
+  protocol with a `FixtureMarketData` so the selector is unit-tested offline (no network in tests).
+  **Documented thresholds:** `min_quote_volume_24h = 2,000,000 USDT`, `min_depth_notional =
+  50,000 USDT`, `depth_pct = 0.005`. **Real funnel on 2026-08-23:** 724 listed pairs, 625
+  tradable USDT perps, 61 clear the volume floor, 60 also clear the depth floor (only TACUSDT was
+  volume-eligible but depth-thin at ~18k). `research_universe` is all 60 survivors;
+  `live_symbols(15)` is the spec's top-15 live set (the majors).
+
+- **Research N is decoupled from the live universe size (captain decision 5 authority).**
+  The live trading universe stays the spec's top 10-15 and remains a separate captain decision;
+  this study used the FULL 60-symbol survivor set as the backtest-research N, which is a
+  backtest-research decision only. This distinction is documented in the selector docstring, the
+  report, and here so a future reader does not mistake N=60 for a live-universe expansion.
+
+- **Supplemental deep-history source: Binance SPOT via the data-vision mirror, RESEARCH ONLY
+  (`crypto_trader.ingest.binance_source.BinanceSpotCandleSource`), PRD section 10.**
+  Bitunix's own kline history is bounded by listing date (majors reach ~2022-04, i.e. ~4.35y),
+  too shallow for a multi-regime out-of-sample window, so a deeper venue was added. Binance's
+  USD-M futures API (`fapi.binance.com`) returns HTTP 451 (geo-blocked) from this environment;
+  the public spot mirror `data-api.binance.vision` is not blocked and reaches back to 2017 for
+  BTC/ETH. It implements the same `CandleSource` protocol (identical kline row layout to Bitunix,
+  parsed the same way) purely so the unchanged ingest pipeline can write it into a SEPARATE
+  research database; it is NEVER registered as the live/paper source. Isolation is proven, not
+  asserted: `tests/test_research_source_isolation.py` statically scans every module under
+  `paper/`, `exchange/`, `safety/`, `approval/`, `api/` and fails if any references Binance
+  (grep-equivalent: `grep -rIl -i binance src/crypto_trader/{paper,exchange,safety,approval,api}`
+  returns nothing). A `RESEARCH_ONLY = True` class marker backs a future runtime guard. Binance
+  spot covers 45 of the 60 universe symbols (the 15 missing are futures-only or 1000x-scaled
+  names). **Parity spot-check (design-review requirement):** across all 9,505 overlapping
+  BTCUSDT 4H bars, Bitunix-perp vs Binance-spot mean |diff| is ~0.045% on every OHLC field (max
+  ~1.9-3.7% on isolated single-bar wicks), so Binance spot is a sound deep-history proxy.
+
+- **Reusable backward-pagination ingest (`crypto_trader.ingest.pipeline.ingest_history`).**
+  Walks `end_time_ms` backward page by page to pull deep history, driven by the RAW page size and
+  raw oldest timestamp (never the post-validation accepted count, which a malformed/duplicate row
+  can shrink below a full page and truncate history early). Stops at a short page (listing start),
+  an `earliest_ms` bound, or a `max_pages` safety cap. Unit-tested offline with the fixture source.
+
+- **The honest outcome: Gate 1 still NOT PASSED, and the negative result HARDENS at scale.**
+  The prior 14-symbol run's out-of-sample sample was too thin (n=33) to tell a weak negative
+  point estimate from noise, so its CI straddled zero. At larger N the ambiguity is gone: every
+  swept combination in both runs produces an out-of-sample bootstrap CI that excludes zero on the
+  NEGATIVE side. Run A (Bitunix-native, 60 symbols, 2022-2026) reaches n=199 out-of-sample closed
+  trades (clearing the 150-300 count target for the first time on real data) at -0.239R, 95% CI
+  [-0.342, -0.125]. Run B (Binance-spot deep, 45 symbols, 2017-2026, multi-regime) agrees: its
+  largest combination scores -0.243R over 625 out-of-sample trades [-0.330, -0.157], and the
+  in-sample-selected combination -0.342R over 62 trades [-0.513, -0.151]. So of the two open
+  constraints PRD 6.2 named, the structural signal-count shortfall is RESOLVED (n is ample) and
+  entry predictiveness is CONFIRMED as the binding one. The funding filter changed nothing (off
+  == on in every row). Per captain decision 5 the fix (a different entry rule or strategy, or
+  accepting the fail) is a captain decision, not a unilateral `StrategyConfig` edit; this task
+  made none. Do not silently re-run universe expansion as a fix: it has now been done at scale
+  and the answer is a confident negative.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

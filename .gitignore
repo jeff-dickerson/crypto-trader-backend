@@ -20,3 +20,5 @@ backtest_reports/*
 !backtest_reports/gate1_real_2026-08-21.md
 !backtest_reports/gate1_real_2026-08-21.json
 !backtest_reports/retune_2026-08-22.md
+!backtest_reports/universe_expansion_2026-08-23.md
+!backtest_reports/universe_expansion_2026-08-23.json
