@@ -192,6 +192,19 @@ SIGNAL ENGINE (pure) -- POSITION MANAGER:
 ADAPTERS: Bitunix | Paper (DryRun) | future
 ```
 
+The REST API seam is now built (`src/crypto_trader/api/`, run with `python -m crypto_trader.api`).
+It is an in-process, standard-library WSGI application over the live paper machine and the unified
+SQLite store: twelve `/api/v1` routes covering health, dashboard, approvals plus an async
+approval-decision surface, the signal log, the journal, a terminal bundle, the mutable/derived risk
+split, and the kill-switch state machine (arm/rearm).
+It is polling-only for v1 (every payload carries an as-of timestamp; Telegram still carries
+urgency), Tailscale-only as a bind-address choice (the tailnet is the auth boundary; no token in
+v1), and it runs in the same process as the bot so it introduces no second SQLite writer.
+The frontend `types.ts` correction and retiring its mock client are a separate follow-on in the
+`crypto-trader-web` repo, built against these real response shapes.
+See [AGENTS.md](AGENTS.md), "Architecture decisions from the backend REST API," for the framework
+choice, the five new tables, the plan/kill-switch state derivations, and the persistence seam.
+
 Two architecture notes from design review, not yet resolved by implementation:
 
 - **Purity is necessary but not sufficient for no-lookahead** (see principle 3 in section 2).
@@ -213,7 +226,12 @@ The five-tab web UI and Whisper voice are deferred past v1, to v1.x or v2.
 - **Telegram (v1, the control and approval surface):** full command vocabulary (`/status`, `/profit`, `/daily`, `/forceexit`, `/risk`, and others), inline Approve/Reject/Modify buttons on every trade plan, a daily digest, and the kill switch.
   Design review flags Telegram as a money-adjacent control surface: the allowlisted `chat_id` must be pinned, and approval buttons must be treated as authenticated actions, not open to any chat that finds the bot.
 - **TUI (v1, read-only):** a lightweight `rich` monitor showing positions, pending approvals, and recent signals.
-- **Web UI (deferred to v1.x/v2):** the original five-tab structure (dashboard, open/closed trades, approval history, settings) remains the design if and when it is built, including the risk slider, overlay toggle, and rate-limit status requirements, and a Qt-free logic-separation pattern.
+- **REST API (v1, built):** the in-process seam every read-only and control surface polls, now built (`src/crypto_trader/api/`, `python -m crypto_trader.api`).
+  Twelve `/api/v1` routes: `/health`, `/dashboard`, `/approvals` plus `POST /approvals/{id}/decision`, `/signals`, `/journal`, `/terminal`, `/risk` (GET and PATCH), and `/kill-switch` plus `POST /kill-switch/arm` and `POST /kill-switch/rearm`.
+  Standard-library WSGI (no framework), one error envelope, cursor pagination on the append-heavy `/signals` and `/journal` only, an async approve-then-submit decision path, and the mutable/derived risk split with the slider clamped server-side so it can never route around the account-level guardrails.
+  Polling-only for v1 (as-of timestamps on every payload), Tailscale-only as a bind-address choice (no token in v1), and the same process as the bot (no second SQLite writer).
+  It reads and drives the existing paper/safety components and persists through a new sink into five new SQLite tables; see [AGENTS.md](AGENTS.md) for the full architecture.
+- **Web UI (deferred to v1.x/v2):** the original five-tab structure (dashboard, open/closed trades, approval history, settings) remains the design if and when it is built, including the risk slider, overlay toggle, and rate-limit status requirements, and a Qt-free logic-separation pattern; the REST API above is the contract it will build against (the `crypto-trader-web` `types.ts` correction is a separate follow-on task).
 - **Natural language (deferred, tiered):** Level 1 (regex-first query parsing) targeted for v1.x; Level 2 (guarded command execution, every consequential action still routed through the approval gate) for a later v1.x; Level 3 (LLM retrieves and explains, never modifies parameters without explicit numeric approval) for v2+.
 - **Voice (deferred to v2+):** speech-to-text feeding the same NL layer, query-only, never voice approval.
 
@@ -311,11 +329,12 @@ Python, Docker (bot process container; a second web UI container is future work 
    Built in `src/crypto_trader/paper/` (risk sizing with the tiered schedule and the kill-switch clamp, the position-manager lifecycle, reconciliation, and the `PaperTrader` loop), `src/crypto_trader/exchange/dryrun.py` (the honest-fills DryRun adapter), and `src/crypto_trader/approval/` (the approval seam, an in-memory fake, and a real Telegram surface that fails safe when no token is configured); see section 6.2 and [AGENTS.md](AGENTS.md).
    The `ExchangeAdapter` interface gained one additive method, `place_market_order` (MARKET is confirmed native), needed for the momentum-shift exit and reused by step 5's kill switch.
    Kill switch and the daily digest were explicitly out of scope for this step and remain step 5.
-5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here). **Backend half done: the kill switch and the daily digest.**
+5. **Interfaces.** The read-only TUI, daily digest, kill switch (Telegram's control and approval surface is a step-4 dependency per section 8, not deferred here), plus the backend REST API. **Backend done: the kill switch, the daily digest, and the REST API.**
    The read-only TUI and the web UI are covered by the separate `crypto-trader-web` app (its Terminal monitor screen substitutes for the TUI), out of this repo's scope.
    Built in `src/crypto_trader/safety/`: `KillSwitch` (armed/triggered state, checked by `PositionManager` before any new entry), `KillSwitchMonitor` (the daily-loss/max-drawdown/API-failure auto-triggers plus the degraded-mode flatten-retry fallback), `EquityTracker` (the one shared equity source for both the kill switch and the digest), and the daily digest/heartbeat delivered through the existing `ApprovalChannel`.
    Both PRD 9.1 open risks are now resolved: the degraded-mode fallback is implemented, and the websocket-dead trigger's condition is written and tested but deliberately left unwired (N/A for the paper adapter, which has no real websocket) with its auto-flatten-vs-alert-and-hold judgment call left for step 6 to decide explicitly.
-   The one interface change is additive: `ExchangeAdapter.consecutive_api_failures()`, matching the `place_market_order` precedent from step 4.
+   Also built in `src/crypto_trader/api/`: the in-process REST API (section 7/8), twelve `/api/v1` routes over the live paper machine and unified SQLite store, with five new tables and real writers wired into the paper loop, `PlanStatus` gaining `FAILED`/`FILLED`, and the kill-switch state machine surfaced (see [AGENTS.md](AGENTS.md)).
+   The interface changes are additive: `ExchangeAdapter.consecutive_api_failures()` (matching the `place_market_order` precedent from step 4), and `PositionManager` gaining an optional persistence sink plus a `defer_approval` async-approval path, both no-ops for every pre-existing caller.
 6. **Bitunix live adapter (Gate 3).** Smallest viable size, scale after it is earned. **Not started.**
    Inherits two explicit decisions from step 5: resolve the candle-anchor MUST-VERIFY note (AGENTS.md) against real Bitunix behavior, and decide the websocket-dead auto-trigger's action (auto-flatten vs. alert-and-hold) before wiring `websocket_dead_trigger` to a real heartbeat.
 

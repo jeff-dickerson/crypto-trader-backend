@@ -345,6 +345,102 @@ It consumes the unmodified `generate_signal` core and the characterization-spike
   independent of this process; this is future ops work, documented in `digest.py`'s module
   docstring.
 
+## Architecture decisions from the backend REST API (Build Order step 5, "Interfaces")
+
+The in-process REST API is the second half of "Interfaces": twelve routes over the live paper
+machine and the unified SQLite store, in `src/crypto_trader/api/`.
+Run it with `python -m crypto_trader.api --populate` (see README.md); serve `--host <tailnet-ip>`
+for Tailscale-only exposure.
+It consumes the unmodified `generate_signal` core and reads the existing paper/safety components;
+its writes go through a new `PersistenceSink` seam so the paper layer never imports the API layer.
+
+- **Framework: the standard library only (a plain WSGI callable plus `wsgiref`), documented choice.**
+  No FastAPI/Flask/uvicorn: the project's dependency footprint is deliberately minimal (only
+  `requests`), and a single-user, single-process, polling-only, tailnet-only API does not justify a
+  large transitive tree.
+  A synchronously-invoked WSGI app fits the plan's in-process invariants (no blocking I/O in a
+  handler, a timeout wrapper on every outbound call) and is testable offline by calling the app
+  directly with no sockets (conduct rule 6).
+  `api/app.py` is the router + `make_wsgi_app`; `api/server.py` is the `wsgiref` runnable server,
+  bind host configurable so Tailscale-only exposure is purely a bind-address choice (no Tailscale
+  provisioning is built, that is deployment).
+  The rationale lives inline in `api/__init__.py`.
+
+- **Five new SQLite tables (migration `002_api_tables.sql`), single-writer invariant preserved.**
+  `signals`, `trade_plans`, `plan_decisions`, `closed_trades`, `kill_switch_events`.
+  The 001 `signals` placeholder ("populated by future tasks") is DROPped and recreated to its real
+  planned shape here; the 001 `trades`/`journal`/`config_history` placeholders are left untouched
+  (`closed_trades` is the real paper-trade journal writer the API reads, distinct from the generic
+  `trades` placeholder).
+  The API and the bot loop are the SAME process (hosting decision), so writing through the store
+  introduces no second writer; if the API is ever split into its own process this must be revisited
+  (`api/store.py` and the migration both carry this note).
+
+- **Writers wired into the paper loop via `PersistenceSink` (`crypto_trader.paper.persistence`).**
+  The base sink is a no-op (`NULL_SINK`), so every pre-API call site and test is unchanged;
+  `crypto_trader.api.store.ApiStore` is the real implementation.
+  `PositionManager` records an entry/exit signal, inserts each plan and threads its status
+  transitions, records each approval decision, and records each closed trade; `KillSwitchMonitor`
+  records kill-switch events.
+  `PaperTrader` needs no change: the manager and monitor each hold their own sink.
+
+- **`PlanStatus` gained `FAILED` and `FILLED` additively; no exhaustive consumer existed.**
+  The only `PlanStatus` consumers are `.is_void` and specific `is` checks (no `match`/switch), so
+  the additions are safe.
+  `FILLED` is set on the entry order's FIRST fill (partial or full): the plan's job ends at the
+  trading lifecycle's start, and `PARTIALLY_FILLED` deliberately stays a `PositionState` concept,
+  never a plan status.
+  `FAILED` records the exchange reason in `trade_plans.failure_reason` (kept distinct from
+  `void_reason`) and keeps the plan visible in `/approvals`.
+
+- **Async approval is `PositionManager(defer_approval=True)`, not a new blocking channel.**
+  In defer mode the manager PROPOSES a plan (persists it, parks it, records the zone as traded so
+  it does not re-fire) instead of blocking to submit; `decide_parked_plan` drives
+  PROPOSED -> APPROVED -> SUBMITTED (or FAILED on a submission exception, with a Telegram alert via
+  `ApprovalChannel.notify`), reusing the existing `_submit_entry` so the manager still owns position
+  state.
+  The synchronous auto-approve flow (`defer_approval=False`) is preserved for the demo populate and
+  every existing test.
+  The submission-failure E2E injects the failure with the DryRun adapter's existing
+  `simulate_outage` knob (no new mechanism), per the task brief.
+
+- **Kill-switch state derivation (the reconciliation the brief flagged).**
+  The plan's four states are DERIVED from the two real booleans plus one small honest addition,
+  not a parallel state field on `KillSwitch`: `is_armed=True` -> ARMED;
+  `is_armed=False, flatten_confirmed=True` -> FLAT_CONFIRMED;
+  `is_armed=False, flatten_confirmed=False` -> FLATTENING, unless the last flatten round exhausted
+  its attempt budget without confirming, which surfaces as FLATTEN_FAILED (the "proxy" the brief
+  offered).
+  `KillSwitchMonitor` gained `state()`, `status_line()` ("Flattening: N of M closed"),
+  `manual_trigger()` (idempotent POST /arm), and `rearm()` (valid only from FLAT_CONFIRMED /
+  FLATTEN_FAILED), plus a `_last_flatten_exhausted` flag set where the existing retry loop already
+  exhausts; the monitor still retries across cycles exactly as before, this only makes the stall
+  observable.
+  `manual_trigger()` returns immediately: it makes exactly ONE non-sleeping flatten attempt
+  (`_attempt_flatten_once`), never the multi-attempt backoff-sleep loop (`_attempt_flatten`), so
+  POST /kill-switch/arm never performs blocking I/O in the handler thread; a repeated arm while
+  still flattening makes one more non-sleeping attempt against the same attempt budget, so it can
+  still reach FLATTEN_FAILED and stay rearm-able.
+  The sleeping, multi-attempt `_attempt_flatten` stays reserved for the auto-trigger path driven
+  by `check_cycle` in the bot-loop thread, where cross-cycle retry (not the handler) finishes
+  flattening on a degraded exchange.
+  `KillSwitchReason` values (lowercase `manual`/`daily_loss`/`max_drawdown`/`api_failures`/
+  `websocket_dead`) ARE the plan's trigger-source list (`MAX_DD` == `max_drawdown`,
+  `WS_DEAD` == `websocket_dead`); the API exposes those values verbatim for internal consistency.
+
+- **Error envelope, pagination, and the outbound timeout.**
+  Every non-2xx is `{"error": {"code", "message", "detail"}}` with a small HTTP mapping
+  (400/404/409/500/503) in `api/errors.py`.
+  Cursor pagination (`api/pagination.py`) is an opaque id-keyset scan, on `/signals` and `/journal`
+  only (the append-heavy logs); the live views stay unpaginated.
+  Outbound exchange reads go through `ApiContext.exchange_read` (`api/timeouts.py`), which bounds
+  the call and maps a timeout or `ExchangeConnectionError` to a 503; for the DryRun adapter this is
+  free, for a live venue it stops a hung socket wedging a handler.
+
+- **Manual-review items still not automated (unchanged by this task).**
+  Commit-message em-dash and co-author-trailer checks remain by-eye (see the conduct-rules note
+  above); `scripts/check_no_em_dash.py` covers code and docs.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

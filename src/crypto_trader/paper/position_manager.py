@@ -53,8 +53,9 @@ from crypto_trader.exchange.types import (
     StopOrderRequest,
     TimeInForce,
 )
-from crypto_trader.ingest.models import Candle
-from crypto_trader.paper.plan import TradePlan
+from crypto_trader.ingest.models import Candle, utc_now
+from crypto_trader.paper.persistence import NULL_SINK, PersistenceSink
+from crypto_trader.paper.plan import PlanStatus, TradePlan
 from crypto_trader.paper.reconciliation import ExpectedPosition
 from crypto_trader.paper.risk import DEFAULT_RISK_CONFIG, RiskConfig, size_trade_plan
 from crypto_trader.safety.kill_switch import KillSwitch
@@ -72,6 +73,38 @@ class PaperExitReason(str, Enum):
     TRAILING_STOP = "trailing_stop"
     TAKE_PROFIT = "take_profit"
     MOMENTUM_SHIFT = "momentum_shift"
+
+
+@dataclass(frozen=True)
+class _ParkedPlan:
+    """A PROPOSED plan awaiting an async (REST/Telegram) approval decision.
+
+    Only populated when the manager runs in `defer_approval` mode: instead of blocking the loop
+    to submit synchronously, the manager persists the plan PROPOSED and parks the little it needs
+    to submit later (the side, the entry boundary for the traded-zone memory, and the plan itself),
+    so `decide_parked_plan` can approve-and-submit or reject it when the operator responds.
+    """
+
+    symbol: str
+    side: PositionSide
+    zone_boundary: float | None
+    plan: TradePlan
+
+
+@dataclass(frozen=True)
+class PlanDecisionOutcome:
+    """The result of deciding a parked plan, for the REST decision endpoint to report."""
+
+    plan_id: str
+    status: PlanStatus
+    failure_reason: str | None = None
+
+
+class _ParkedSignalView:
+    """The minimal signal view `_submit_entry` needs, reconstructed from a parked plan."""
+
+    def __init__(self, parked: _ParkedPlan) -> None:
+        self.zone_boundary = parked.zone_boundary
 
 
 @dataclass(frozen=True)
@@ -147,6 +180,8 @@ class PositionManager:
         slider: float = 1.0,
         entry_valid_bars: int = DEFAULT_ENTRY_VALID_BARS,
         kill_switch: KillSwitch | None = None,
+        sink: PersistenceSink = NULL_SINK,
+        defer_approval: bool = False,
     ) -> None:
         self._adapter = adapter
         self._approval = approval
@@ -154,6 +189,15 @@ class PositionManager:
         self._risk_config = risk_config
         self._slider = slider
         self._entry_valid_bars = entry_valid_bars
+        # Persistence seam (REST API build): NULL_SINK is a no-op, so every pre-API call site
+        # keeps its exact behaviour. A real sink records signals, plans, decisions, closed trades.
+        self._sink = sink
+        # Async approval (REST API build): when True the manager PROPOSES a plan (persists it and
+        # parks it) instead of blocking to submit synchronously; the REST decision endpoint drives
+        # submission via decide_parked_plan. False preserves the synchronous approve-then-submit
+        # flow every existing call site and test relies on.
+        self._defer_approval = defer_approval
+        self._parked: dict[str, _ParkedPlan] = {}
         # Build Order step 5 (AGENTS.md): None preserves every pre-step-5 call site's behaviour
         # (no gate at all). When supplied, a triggered (not-armed) kill switch halts signal
         # generation account-wide, the same "no new entries" obligation the per-symbol `frozen`
@@ -172,6 +216,36 @@ class PositionManager:
     def approval(self) -> ApprovalChannel:
         """The approval/notification channel, so the loop can send reconciliation alerts."""
         return self._approval
+
+    @property
+    def risk_config(self) -> RiskConfig:
+        """The risk policy, so the REST /risk endpoint derives numbers from the one source."""
+        return self._risk_config
+
+    @property
+    def slider(self) -> float:
+        """The current risk-slider multiplier applied to every new plan."""
+        return self._slider
+
+    @slider.setter
+    def slider(self, value: float) -> None:
+        """Update the slider (PATCH /risk); the value is expected to be already clamped."""
+        self._slider = value
+
+    def open_risk_amount(self) -> float:
+        """Currency at risk across all exposed positions if every current stop were hit now.
+
+        Sums |entry - current_stop| * intended_quantity over PARTIAL/OPEN symbols, the honest
+        "open risk exposure" the REST /risk endpoint reports (uses the resting stop, so a trailed
+        stop reduces reported risk exactly as it reduces real risk).
+        """
+        total = 0.0
+        for ms in self._symbols.values():
+            if ms.status in (PositionStatus.PARTIAL, PositionStatus.OPEN):
+                stop = ms.current_stop if ms.current_stop is not None else ms.initial_stop
+                if ms.entry_price is not None and stop is not None:
+                    total += abs(ms.entry_price - stop) * ms.intended_quantity
+        return total
 
     def managed(self, symbol: str) -> _ManagedSymbol:
         return self._symbols.setdefault(symbol, _ManagedSymbol(symbol=symbol))
@@ -266,6 +340,13 @@ class PositionManager:
                 ms.extreme_price = position.entry_price
             if not ms.entered_notified:
                 ms.entered_notified = True
+                # The plan's job ends at the first fill: the position lifecycle owns it now, so the
+                # plan reaches its terminal FILLED status (a first partial fill counts, PROPOSED ->
+                # ... -> FILLED; PARTIALLY_FILLED is a PositionState concept, not a plan status).
+                if ms.plan is not None:
+                    self._sink.update_plan_status(
+                        ms.plan.plan_id, PlanStatus.FILLED, at=candle.close_time
+                    )
                 self._approval.notify(
                     ChannelEvent(
                         kind=EventKind.ENTRY_FILLED,
@@ -320,22 +401,22 @@ class PositionManager:
         ):
             ms.reset_to_flat()
             return
-        self.closed_trades.append(
-            ClosedPaperTrade(
-                symbol=ms.symbol,
-                side=ms.side,
-                plan_id=ms.plan.plan_id,
-                entry_price=ms.entry_price,
-                exit_price=exit_price,
-                initial_stop=ms.initial_stop,
-                take_profit=ms.take_profit,
-                quantity=ms.intended_quantity,
-                exit_reason=reason,
-                realized_pnl=realized_pnl,
-                entry_time=ms.entry_time or candle.open_time,
-                exit_time=candle.close_time,
-            )
+        closed = ClosedPaperTrade(
+            symbol=ms.symbol,
+            side=ms.side,
+            plan_id=ms.plan.plan_id,
+            entry_price=ms.entry_price,
+            exit_price=exit_price,
+            initial_stop=ms.initial_stop,
+            take_profit=ms.take_profit,
+            quantity=ms.intended_quantity,
+            exit_reason=reason,
+            realized_pnl=realized_pnl,
+            entry_time=ms.entry_time or candle.open_time,
+            exit_time=candle.close_time,
         )
+        self.closed_trades.append(closed)
+        self._sink.record_closed_trade(closed, at=candle.close_time)
         # One zone, one trade: remember the boundary so a later retest is rejected even after FLAT.
         if ms.zone_boundary is not None:
             ms.traded_zones.append(ms.zone_boundary)
@@ -379,7 +460,9 @@ class PositionManager:
         side = (
             PositionSide.LONG if signal.action is SignalAction.ENTER_LONG else PositionSide.SHORT
         )
+        signal_id = self._sink.record_signal(signal, symbol=ms.symbol, at=candle.close_time)
         plan = self._size(ms.symbol, side, signal, slider=self._slider)
+        self._sink.insert_plan(plan, at=candle.close_time, signal_id=signal_id)
         if plan.is_void:
             self.voided_plans.append(plan)
             self._approval.notify(
@@ -393,10 +476,36 @@ class PositionManager:
             if signal.zone_boundary is not None:
                 ms.traded_zones.append(signal.zone_boundary)
             return
+        if self._defer_approval:
+            self._park_for_approval(ms, plan, side, signal)
+            return
         approved = self._seek_approval(plan)
         if approved is None:
             return
-        self._submit_entry(ms, approved, side, signal)
+        self._submit_entry(ms, approved, side, signal, at=candle.close_time)
+
+    def _park_for_approval(
+        self, ms: _ManagedSymbol, plan: TradePlan, side: PositionSide, signal
+    ) -> None:
+        """Persist a PROPOSED plan (already inserted) and park it for an async decision.
+
+        The zone is recorded as traded immediately, so a deferred plan does not re-propose on the
+        next bar's identical setup while it waits for the operator; if it is later rejected or
+        fails, the one-zone-one-trade memory still stands (the setup was genuinely taken up).
+        """
+        self._parked[plan.plan_id] = _ParkedPlan(
+            symbol=ms.symbol, side=side, zone_boundary=signal.zone_boundary, plan=plan
+        )
+        if signal.zone_boundary is not None:
+            ms.traded_zones.append(signal.zone_boundary)
+        self._approval.notify(
+            ChannelEvent(
+                kind=EventKind.PLAN_PROPOSED,
+                symbol=ms.symbol,
+                message=f"{ms.symbol} plan {plan.plan_id} proposed, awaiting approval "
+                f"({plan.risk_line})",
+            )
+        )
 
     def _size(
         self, symbol: str, side: PositionSide, signal, slider: float
@@ -425,9 +534,16 @@ class PositionManager:
         for _ in range(2):  # at most the original plus one modify round
             decision = self._approval.request_approval(current)
             self.approvals.append((current.plan_id, decision.verdict))
+            when = utc_now()
+            self._sink.record_plan_decision(
+                current.plan_id, decision.verdict.value, at=when,
+                actor=decision.actor, note=decision.note,
+            )
             if decision.verdict is ApprovalVerdict.APPROVE:
+                self._sink.update_plan_status(current.plan_id, PlanStatus.APPROVED, at=when)
                 return current.approved()
             if decision.verdict is ApprovalVerdict.REJECT:
+                self._sink.update_plan_status(current.plan_id, PlanStatus.REJECTED, at=when)
                 self._approval.notify(
                     ChannelEvent(
                         kind=EventKind.PLAN_REJECTED,
@@ -446,6 +562,7 @@ class PositionManager:
                 current.symbol, current.side,
                 _signal_view(current), slider=new_slider,
             )
+            self._sink.insert_plan(resized, at=when)
             if resized.is_void:
                 self.voided_plans.append(resized)
                 self._approval.notify(
@@ -459,8 +576,93 @@ class PositionManager:
             current = resized
         return None
 
+    def decide_parked_plan(
+        self,
+        plan_id: str,
+        verdict: ApprovalVerdict,
+        *,
+        actor: str | None = None,
+        note: str | None = None,
+        now: datetime | None = None,
+    ) -> PlanDecisionOutcome:
+        """Decide a parked (PROPOSED, deferred) plan from the REST decision endpoint.
+
+        On REJECT the plan moves to REJECTED and is dropped. On APPROVE the entry order is
+        submitted in-process against the exchange; success moves it to SUBMITTED (the position
+        lifecycle then owns it), and a submission failure moves it to FAILED with the exchange's
+        reason recorded and a Telegram alert fired, leaving the plan visible in the approvals list.
+        Raises KeyError if `plan_id` is not a currently parked plan (the caller maps that to a
+        409 conflict: the plan is not actionable through the live manager).
+        """
+        when = now or utc_now()
+        parked = self._parked.get(plan_id)
+        if parked is None:
+            raise KeyError(plan_id)
+        ms = self.managed(parked.symbol)
+        self.approvals.append((plan_id, verdict))
+        self._sink.record_plan_decision(plan_id, verdict.value, at=when, actor=actor, note=note)
+
+        if verdict is ApprovalVerdict.REJECT:
+            del self._parked[plan_id]
+            self._sink.update_plan_status(plan_id, PlanStatus.REJECTED, at=when)
+            self._approval.notify(
+                ChannelEvent(
+                    kind=EventKind.PLAN_REJECTED,
+                    symbol=parked.symbol,
+                    message=f"{parked.symbol} plan {plan_id} rejected",
+                )
+            )
+            return PlanDecisionOutcome(plan_id=plan_id, status=PlanStatus.REJECTED)
+
+        # APPROVE.
+        self._sink.update_plan_status(plan_id, PlanStatus.APPROVED, at=when)
+        if ms.status is not PositionStatus.FLAT:
+            # The window between propose and approve is near-zero by design, but if the symbol is
+            # no longer flat we refuse to stack a second entry onto it (the kill switch is the
+            # override path, not a race here); void the approved plan with a clear reason.
+            del self._parked[plan_id]
+            self._sink.update_plan_status(
+                plan_id, PlanStatus.VOID, at=when,
+                void_reason="symbol no longer flat at submission time",
+            )
+            return PlanDecisionOutcome(plan_id=plan_id, status=PlanStatus.VOID)
+
+        try:
+            self._submit_entry(
+                ms, parked.plan.approved(), parked.side, _ParkedSignalView(parked), at=when
+            )
+        except Exception as exc:  # a submission failure at the exchange
+            del self._parked[plan_id]
+            reason = str(exc) or exc.__class__.__name__
+            self._sink.update_plan_status(
+                plan_id, PlanStatus.FAILED, at=when, void_reason=reason
+            )
+            self._approval.notify(
+                ChannelEvent(
+                    kind=EventKind.PLAN_FAILED,
+                    symbol=parked.symbol,
+                    message=f"{parked.symbol} plan {plan_id} submission failed: {reason}",
+                )
+            )
+            return PlanDecisionOutcome(
+                plan_id=plan_id, status=PlanStatus.FAILED, failure_reason=reason
+            )
+
+        del self._parked[plan_id]
+        return PlanDecisionOutcome(plan_id=plan_id, status=PlanStatus.SUBMITTED)
+
+    def parked_plan_ids(self) -> list[str]:
+        """The plan ids currently parked awaiting an async decision (test/introspection helper)."""
+        return list(self._parked)
+
     def _submit_entry(
-        self, ms: _ManagedSymbol, plan: TradePlan, side: PositionSide, signal
+        self,
+        ms: _ManagedSymbol,
+        plan: TradePlan,
+        side: PositionSide,
+        signal,
+        *,
+        at: datetime | None = None,
     ) -> None:
         rule = self._adapter.get_symbol_rule(ms.symbol)
         order_side = OrderSide.BUY if side is PositionSide.LONG else OrderSide.SELL
@@ -475,6 +677,7 @@ class PositionManager:
             take_profit_price=rule.round_price(plan.take_profit_price),
         )
         order = self._adapter.place_limit_order(request)
+        self._sink.update_plan_status(plan.plan_id, PlanStatus.SUBMITTED, at=at or utc_now())
         self.submitted_order_plan_ids.append(plan.plan_id)
         self._approval.notify(
             ChannelEvent(
@@ -503,6 +706,12 @@ class PositionManager:
                 self._adapter.cancel_order(ms.symbol, ms.entry_order_id)
             except KeyError:
                 pass  # already filled or gone; the next sync will settle the state
+            # A SUBMITTED entry cancelled unfilled reaches VOID (state machine: SUBMITTED -> VOID).
+            if ms.plan is not None:
+                self._sink.update_plan_status(
+                    ms.plan.plan_id, PlanStatus.VOID, at=candle.close_time,
+                    void_reason="entry order expired unfilled",
+                )
             # Zone stays recorded as attempted so a voided/expired setup does not re-fire.
             if ms.zone_boundary is not None:
                 ms.traded_zones.append(ms.zone_boundary)
@@ -522,6 +731,7 @@ class PositionManager:
         state = self._open_state(ms)
         signal = generate_signal(h4_window, d1_window, state, self._strategy_config)
         if signal.action is SignalAction.EXIT_MOMENTUM_SHIFT:
+            self._sink.record_signal(signal, symbol=ms.symbol, at=candle.close_time)
             self._exit_at_market(ms, candle, PaperExitReason.MOMENTUM_SHIFT)
             return
         if signal.action is SignalAction.UPDATE_TRAILING_STOP and signal.stop_price is not None:

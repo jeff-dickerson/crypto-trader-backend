@@ -21,8 +21,9 @@ A real Gate 1 run has since happened against ingested Bitunix candles across 14 
 A read-only Bitunix characterization spike (no orders placed, no credentials, public endpoints only) produced the `ExchangeAdapter` interface in `src/crypto_trader/exchange/`: the abstract contract for paper and live adapters, with its shared order/position/fill data models, designed against Bitunix's verified public API surface (see [PRD.md](PRD.md) section 9.3 and [AGENTS.md](AGENTS.md)).
 Step 4 adds the first working implementation of that interface: the DryRun paper adapter, alongside the live Bitunix adapter still to come in step 6.
 Step 4 also added one method to that interface, `place_market_order` (MARKET is a confirmed-native Bitunix order type), needed for the momentum-shift exit and reused by step 5's kill switch.
-Step 5 adds the backend half of "Interfaces": the kill switch and the daily digest, in `src/crypto_trader/safety/` (see [PRD.md](PRD.md) section 9.1/9.5 and [AGENTS.md](AGENTS.md)).
-The read-only TUI and the web UI are covered by the separate `crypto-trader-web` app, out of this repo's scope.
+Step 5 adds the backend of "Interfaces": the kill switch and the daily digest in `src/crypto_trader/safety/` (see [PRD.md](PRD.md) section 9.1/9.5), plus the in-process REST API in `src/crypto_trader/api/`.
+The REST API is a standard-library WSGI application over the live paper machine and the unified SQLite store: twelve `/api/v1` routes (health, dashboard, approvals plus an async decision endpoint, the signal log, the journal, a terminal bundle, the mutable/derived risk split, and the kill-switch state machine), five new SQLite tables with real writers wired into the paper loop, one error envelope, and cursor pagination on the append-heavy logs (see the "Running the REST API" section below and [AGENTS.md](AGENTS.md)).
+The read-only TUI and the web UI are covered by the separate `crypto-trader-web` app, out of this repo's scope; the REST API is the contract that app will build against.
 The live Bitunix adapter (step 6) is still a future task; no live exchange credential handling exists yet.
 See [PRD.md](PRD.md) section 12 for the full build order with accurate current status on every step.
 
@@ -71,8 +72,20 @@ src/crypto_trader/
   safety/
     equity.py              EquityTracker: the one shared daily-anchor/peak-equity source
     kill_switch.py          KillSwitch: the armed/triggered state machine
-    monitor.py               KillSwitchMonitor: auto-triggers and the degraded-mode flatten retry
+    monitor.py               KillSwitchMonitor: auto-triggers, degraded-mode retry, and the derived state
     digest.py                 the once-a-day digest/heartbeat through ApprovalChannel
+  api/
+    app.py                 the WSGI router and make_wsgi_app (no third-party framework)
+    handlers.py             the twelve route handlers
+    context.py               ApiContext: the live in-process state the handlers read and drive
+    store.py                  ApiStore: the SQLite reader/writer and the paper loop's PersistenceSink
+    errors.py                 the error envelope and machine-readable codes
+    pagination.py             cursor pagination for /signals and /journal
+    timeouts.py               the outbound-call timeout wrapper (maps failures to 503)
+    serialization.py          store rows and live objects to response JSON with as-of timestamps
+    build.py                   wire an ApiContext to a paper machine
+    server.py                   the wsgiref runnable server (bind host = tailnet interface)
+    __main__.py                  API entry point (python -m crypto_trader.api --populate)
   secrets.py             env-loaded secrets (Telegram token), redacted, never in the config plane
   backtest/
     engine.py             no-lookahead replay engine (causal_windows) and fill/management sim
@@ -111,6 +124,13 @@ tests/
   test_paper_loop.py               end-to-end approve-then-execute runs and the Gate 2 audit
   test_kill_switch.py              each auto-trigger, the degraded-mode fallback, and rearm
   test_daily_digest.py             digest content, cadence, and honest degrading when unreachable
+  api_helpers.py                   the in-process WSGI test client and paper-machine builders
+  test_api_store.py                the five API tables and every PersistenceSink writer/reader
+  test_api_read_endpoints.py       read endpoints, error envelope, pagination, and the 503 mapping
+  test_api_decision.py             the approval decision endpoint and plan state machine (incl. FAILED)
+  test_api_kill_switch.py          arm/rearm, idempotency, and an injected flatten failure
+  test_api_risk.py                 the risk PATCH clamp and derived recalculation
+  test_api_server.py               the wsgiref server binding and serving over a loopback socket
 ```
 
 ## Running the tests
@@ -164,6 +184,20 @@ python -m crypto_trader.paper --synthetic --years 1.5
 If a Telegram bot token and an allowlisted chat id are set in the environment (`CRYPTO_TRADER_TELEGRAM_BOT_TOKEN` and `CRYPTO_TRADER_TELEGRAM_ALLOWED_CHAT_ID`), the loop uses the real Telegram approval channel; otherwise it prints a clear message and falls back to the in-memory auto-approve channel, so it never crashes for lack of a credential.
 Like the Gate 1 lab, a synthetic run validates only that the machine works, never the edge: it builds and self-tests the machine, and the 4-week paper-trading window is a future operational task (see [PRD.md](PRD.md) section 6.2).
 The kill switch and the daily digest (`src/crypto_trader/safety/`) are wired into this run: the summary prints the kill switch's final state, and a digest fires once per UTC day through the same approval channel.
+
+## Running the REST API
+
+The backend REST API (`src/crypto_trader/api/`) is the in-process seam every read-only and control surface polls: twelve `/api/v1` routes over the live paper machine and the unified SQLite store.
+It is a standard-library WSGI application (no framework), polling-only for v1, and meant to run in the same process as the bot; bind the host to the tailnet interface for Tailscale-only exposure.
+
+```bash
+python -m crypto_trader.api --populate --years 1.5
+curl http://127.0.0.1:8787/api/v1/health
+```
+
+`--populate` first runs a short synthetic paper loop (auto-approved) so the read endpoints have real signals and closed trades to show; without it the API serves an empty in-memory store.
+`--host <tailnet-ip>` binds a specific interface (the auth boundary is the tailnet; there is no token in v1), and `--db <path>` points at a persistent SQLite file instead of the in-memory demo.
+The routes cover health, dashboard, approvals plus an async `POST /approvals/{id}/decision`, the signal log, the journal, a terminal bundle, the mutable/derived `/risk` split (`GET` and `PATCH`), and the kill-switch state machine (`GET` plus `POST /kill-switch/arm` and `/rearm`); see [AGENTS.md](AGENTS.md) for the full architecture.
 
 ## Running with Docker
 
