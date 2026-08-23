@@ -45,7 +45,9 @@ src/crypto_trader/
     models.py            RawCandle (untrusted) and Candle (validated) data models
     source.py             swappable CandleSource interface, Bitunix HTTP and fixture implementations
     validate.py            ugly-data validation: dedup, gap detection, timestamp sanity, still-forming exclusion
-    pipeline.py             fetch, validate, store orchestration
+    pipeline.py             fetch, validate, store orchestration; ingest_history for backward-paginated deep history
+    universe.py             rule-defined, self-updating symbol selection (volume floor, depth floor) via the MarketData protocol
+    binance_source.py        Binance spot deep-history CandleSource, RESEARCH ONLY, import-isolated from live/paper
   strategy/
     config.py             every pinned, overridable strategy parameter (StrategyConfig)
     indicators.py          shared pure indicator helpers (SMA)
@@ -104,6 +106,10 @@ tests/
   test_validate.py                 unit tests for the validator
   test_db_schema.py                schema, WAL, and backup tests
   test_ingest_pipeline.py          end to end ingest tests, fixture data only
+  test_ingest_history.py           backward-pagination deep-history ingest tests, fixture source only
+  test_universe.py                 universe selector tests against a FixtureMarketData
+  test_binance_source.py           Binance spot source parsing tests, no network
+  test_research_source_isolation.py    static scan proving Binance is unreachable from live/paper code
   test_volume_profile.py           volume profile unit tests
   test_bias.py                     daily bias gate unit tests
   test_zones.py                    setup detection and entry-geometry unit tests
@@ -215,3 +221,7 @@ A second, read-only UI service can be added to `docker-compose.yml` later withou
 Candle ingest talks to Bitunix's public, unauthenticated futures kline endpoint when the network is reachable.
 No exchange credentials are used or stored anywhere in this project.
 When the network is not reachable, or for tests and local development, ingest runs against `FixtureCandleSource`, a swappable in-memory data source fed by synthetic candle fixtures.
+
+The trading universe is rule-defined and self-updating (`crypto_trader.ingest.universe`): a 24h quote-volume floor plus an order-book depth check run against Bitunix public market data, yielding the live top-10-to-15 set and, for backtest research, the full liquid survivor set.
+A research-only deep-history source (`crypto_trader.ingest.binance_source.BinanceSpotCandleSource`, Binance spot via the public data-vision mirror) exists solely to widen the Gate 1 backtest sample; it is RESEARCH/BACKTEST ONLY, never a live or paper data source, and a test (`tests/test_research_source_isolation.py`) proves it cannot be reached from any live/paper code path.
+A universe-expansion Gate 1 re-run on this enlarged, multi-venue, multi-regime sample is committed at `backtest_reports/universe_expansion_2026-08-23.md` (and `.json`): Gate 1 still does not pass, and the negative out-of-sample edge hardens into statistical significance at scale (see [PRD.md](PRD.md) section 6.2).
