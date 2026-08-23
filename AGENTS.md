@@ -67,7 +67,7 @@ Manual-review items not automated yet: commit-message em-dash and co-author-trai
   `BitunixCandleSource` hits Bitunix's public, unauthenticated futures kline endpoint (`https://fapi.bitunix.com/api/v1/futures/market/kline`), reachable from the dev/CI environment as of this task; no credentials involved.
   `FixtureCandleSource` serves synthetic data for tests and offline development; tests use only this source.
 - **Symbol universe.** `crypto_trader.config.DEFAULT_SYMBOLS` is a small seed list (BTCUSDT, ETHUSDT) for development.
-  Building out the full universe is future work.
+  The rule-defined, self-updating universe selector was later built; see "Architecture decisions from the universe expansion" below.
 
 ## Architecture decisions from Build Order step 2 (pure strategy framework)
 
