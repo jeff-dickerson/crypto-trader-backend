@@ -188,7 +188,13 @@ class KillSwitchMonitor:
             return None
 
     def _trigger(
-        self, reason: KillSwitchReason, message: str, now: datetime, detail: dict[str, object]
+        self,
+        reason: KillSwitchReason,
+        message: str,
+        now: datetime,
+        detail: dict[str, object],
+        *,
+        flatten_once: bool = False,
     ) -> None:
         self.kill_switch.trigger(reason, message, now=now, detail=detail)
         # Capture how many positions the flatten must close, so the API can render progress.
@@ -202,7 +208,10 @@ class KillSwitchMonitor:
                 detail={"reason": reason.value, **detail},
             )
         )
-        self._attempt_flatten(now)
+        if flatten_once:
+            self._attempt_flatten_once(now)
+        else:
+            self._attempt_flatten(now)
         self._sink.record_kill_switch_event(
             source=reason.value,
             outcome=self.state().value,
@@ -263,6 +272,63 @@ class KillSwitchMonitor:
                 ),
             )
         )
+
+    def _attempt_flatten_once(self, now: datetime) -> None:
+        """One non-sleeping flatten attempt, for the manual (API) arm path.
+
+        `manual_trigger` (POST /kill-switch/arm) must return immediately with no blocking I/O in
+        the handler thread, so unlike `_attempt_flatten` it never sleeps between attempts and
+        never loops. It shares the same `flatten_attempt_count` / `_last_flatten_exhausted`
+        bookkeeping, so a repeated manual arm while still flattening counts toward the same
+        `flatten_max_attempts` budget and eventually reaches FLATTEN_FAILED exactly like the
+        auto-trigger path, keeping rearm reachable. The `now` parameter is accepted for symmetry
+        with `_attempt_flatten` even though this attempt does not itself need it.
+        """
+        del now
+        attempt = self.flatten_attempt_count + 1
+        self.flatten_attempt_count = attempt
+        exhausted = attempt >= self.config.flatten_max_attempts
+        try:
+            self._cancel_and_close_all()
+        except ExchangeConnectionError as exc:
+            self.approval.notify(
+                ChannelEvent(
+                    kind=EventKind.KILL_SWITCH_DEGRADED,
+                    message=(
+                        f"kill switch degraded mode: flatten attempt {attempt} could not "
+                        f"reach the exchange ({exc}); on-exchange resting stops remain the "
+                        "safety floor, retrying"
+                    ),
+                    detail={"attempt": attempt},
+                )
+            )
+            self._last_flatten_exhausted = exhausted
+            return
+        if self._confirm_flat():
+            self.kill_switch.mark_flatten_confirmed()
+            self._last_flatten_exhausted = False
+            self.approval.notify(
+                ChannelEvent(
+                    kind=EventKind.KILL_SWITCH_FLATTENED,
+                    message=(
+                        "kill switch confirmed flat: the exchange reports no open "
+                        "positions or orders"
+                    ),
+                )
+            )
+            return
+        self._last_flatten_exhausted = exhausted
+        if exhausted:
+            self.approval.notify(
+                ChannelEvent(
+                    kind=EventKind.KILL_SWITCH_DEGRADED,
+                    message=(
+                        f"kill switch: {self.config.flatten_max_attempts} flatten attempt(s) "
+                        "exhausted without exchange confirmation; on-exchange stops remain the "
+                        "floor, will keep retrying next cycle"
+                    ),
+                )
+            )
 
     def _cancel_and_close_all(self) -> None:
         """Close positions at market before cancelling resting orders.
@@ -333,10 +399,14 @@ class KillSwitchMonitor:
     def manual_trigger(self, *, now: datetime) -> KillSwitchState:
         """Engage the kill switch from the API (POST /kill-switch/arm). Idempotent.
 
-        Engaging while ARMED triggers the MANUAL halt and attempts to flatten. Engaging while
-        already halted does not re-trigger (nothing new to record); it re-attempts the flatten,
-        so a second POST /arm while FLATTENING/FLATTEN_FAILED keeps trying rather than erroring.
-        Returns the resulting state, which the endpoint reports immediately.
+        Engaging while ARMED triggers the MANUAL halt and makes exactly ONE non-sleeping flatten
+        attempt, then returns immediately: no blocking I/O in the handler thread (the multi-attempt
+        backoff loop in `_attempt_flatten` stays reserved for the auto-trigger path driven by
+        `check_cycle` in the bot-loop thread). Engaging while already halted does not re-trigger
+        (nothing new to record); it makes one more non-sleeping flatten attempt, so a repeated
+        POST /arm while FLATTENING/FLATTEN_FAILED keeps making progress (and can still reach
+        FLATTEN_FAILED once the cumulative attempt budget is exhausted) rather than erroring or
+        blocking. Returns the resulting state, which the endpoint reports immediately.
         """
         if self.kill_switch.is_armed:
             self._trigger(
@@ -344,9 +414,10 @@ class KillSwitchMonitor:
                 "manual kill switch engaged via the REST API",
                 now,
                 {"source": "api"},
+                flatten_once=True,
             )
         else:
-            self._attempt_flatten(now)
+            self._attempt_flatten_once(now)
         return self.state()
 
     def rearm(self, *, now: datetime) -> KillSwitchState:

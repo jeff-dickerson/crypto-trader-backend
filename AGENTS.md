@@ -416,6 +416,14 @@ its writes go through a new `PersistenceSink` seam so the paper layer never impo
   FLATTEN_FAILED), plus a `_last_flatten_exhausted` flag set where the existing retry loop already
   exhausts; the monitor still retries across cycles exactly as before, this only makes the stall
   observable.
+  `manual_trigger()` returns immediately: it makes exactly ONE non-sleeping flatten attempt
+  (`_attempt_flatten_once`), never the multi-attempt backoff-sleep loop (`_attempt_flatten`), so
+  POST /kill-switch/arm never performs blocking I/O in the handler thread; a repeated arm while
+  still flattening makes one more non-sleeping attempt against the same attempt budget, so it can
+  still reach FLATTEN_FAILED and stay rearm-able.
+  The sleeping, multi-attempt `_attempt_flatten` stays reserved for the auto-trigger path driven
+  by `check_cycle` in the bot-loop thread, where cross-cycle retry (not the handler) finishes
+  flattening on a degraded exchange.
   `KillSwitchReason` values (lowercase `manual`/`daily_loss`/`max_drawdown`/`api_failures`/
   `websocket_dead`) ARE the plan's trigger-source list (`MAX_DD` == `max_drawdown`,
   `WS_DEAD` == `websocket_dead`); the API exposes those values verbatim for internal consistency.

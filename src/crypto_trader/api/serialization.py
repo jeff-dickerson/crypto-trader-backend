@@ -9,6 +9,7 @@ wire shapes stay consistent (the frontend types the plan defers to step 7 are de
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from crypto_trader.exchange.types import Position
@@ -90,12 +91,13 @@ def closed_trade_to_json(row: dict) -> dict:
 
 def kill_switch_event_to_json(row: dict) -> dict:
     """A `kill_switch_events` row as response JSON."""
+    detail = row["detail"]
     return {
         "id": row["id"],
         "occurred_at": iso(row["occurred_at"]),
         "trigger_source": row["trigger_source"],
         "outcome": row["outcome"],
-        "detail": row["detail"],
+        "detail": json.loads(detail) if detail else None,
     }
 
 

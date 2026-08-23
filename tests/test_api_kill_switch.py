@@ -1,10 +1,11 @@
 """Kill-switch endpoints E2E (build-order step 5).
 
 Arm with an open paper position and watch it flatten and confirm, prove arm is idempotent, inject a
-flatten failure (via the DryRun adapter's simulate_outage knob) and watch the state surface as
-FLATTEN_FAILED, and drive the rearm rules (valid only from a flat/failed state). The kill switch is
-the same instance the loop's auto-triggers use, so the API represents the built ops behavior rather
-than re-deciding it.
+flatten failure (via the DryRun adapter's simulate_outage knob) and watch a single arm call surface
+FLATTENING (one non-sleeping attempt, returned promptly) and repeated arms exhaust the attempt
+budget into FLATTEN_FAILED, and drive the rearm rules (valid only from a flat/failed state). The
+kill switch is the same instance the loop's auto-triggers use, so the API represents the built ops
+behavior rather than re-deciding it.
 """
 
 from __future__ import annotations
@@ -46,13 +47,31 @@ def test_arm_is_idempotent() -> None:
     assert len(body["recent_events"]) == 1
 
 
-def test_injected_flatten_failure_surfaces_flatten_failed() -> None:
+def test_injected_flatten_failure_surfaces_flattening_after_one_attempt() -> None:
     ctx = _ctx()
     open_long_position(ctx)
     client = WsgiClient(ctx)
     ctx.adapter.simulate_outage(100)  # the exchange cannot be reached for the whole flatten
 
     status, body = client.post("/api/v1/kill-switch/arm")
+    assert status == 200
+    # A single arm call makes exactly one non-sleeping flatten attempt and returns promptly.
+    assert body["state"] == "flattening"
+    assert body["is_armed"] is False
+    assert body["flatten_confirmed"] is False
+
+
+def test_repeated_arm_exhausts_the_attempt_budget_into_flatten_failed() -> None:
+    ctx = _ctx()
+    open_long_position(ctx)
+    client = WsgiClient(ctx)
+    ctx.adapter.simulate_outage(100)  # the exchange cannot be reached for the whole flatten
+
+    status, body = client.post("/api/v1/kill-switch/arm")
+    assert body["state"] == "flattening"
+    max_attempts = ctx.monitor.config.flatten_max_attempts
+    for _ in range(max_attempts - 1):
+        status, body = client.post("/api/v1/kill-switch/arm")
     assert status == 200
     assert body["state"] == "flatten_failed"
     assert body["is_armed"] is False
@@ -88,7 +107,10 @@ def test_rearm_from_flatten_failed_resumes_trading() -> None:
     open_long_position(ctx)
     client = WsgiClient(ctx)
     ctx.adapter.simulate_outage(100)
-    client.post("/api/v1/kill-switch/arm")  # -> flatten_failed
+    max_attempts = ctx.monitor.config.flatten_max_attempts
+    for _ in range(max_attempts):
+        status, body = client.post("/api/v1/kill-switch/arm")  # each call, one attempt
+    assert body["state"] == "flatten_failed"
 
     status, body = client.post("/api/v1/kill-switch/rearm")
     assert status == 200
